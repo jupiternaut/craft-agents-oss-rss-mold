@@ -1,0 +1,177 @@
+diff --git a/apps/electron/src/renderer/components/app-shell/MainContentPanel.tsx b/apps/electron/src/renderer/components/app-shell/MainContentPanel.tsx
+index 0c1a029..b2ae505 100644
+--- a/apps/electron/src/renderer/components/app-shell/MainContentPanel.tsx
++++ b/apps/electron/src/renderer/components/app-shell/MainContentPanel.tsx
+@@ -22,6 +22,7 @@ import { Panel } from './Panel'
+ import { MultiSelectPanel } from './MultiSelectPanel'
+ import { useAppShellContext } from '@/context/AppShellContext'
+ import { sessionMetaMapAtom, type SessionMeta } from '@/atoms/sessions'
++import { sourcesAtom } from '@/atoms/sources'
+ import { StoplightProvider } from '@/context/StoplightContext'
+ import {
+   useNavigationState,
+@@ -35,13 +36,14 @@ import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelecti
+ import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
+ import { extractLabelId } from '@craft-agent/shared/labels'
+ import type { SessionStatusId } from '@/config/session-status-config'
+-import { SourceInfoPage, ChatPage } from '@/pages'
++import { ChatPage, RssSourcePage, SourceInfoPage } from '@/pages'
+ import SkillInfoPage from '@/pages/SkillInfoPage'
+ import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
+ import { AutomationInfoPage } from '../automations/AutomationInfoPage'
+ import type { ExecutionEntry } from '../automations/types'
+ import { automationsAtom } from '@/atoms/automations'
+ import { SendResourceToWorkspaceDialog, type SendResourceType } from './SendResourceToWorkspaceDialog'
++import { isRssMoldSource } from '@/lib/rss-mold'
+ 
+ export interface MainContentPanelProps {
+   /** Whether both sidebar and navigator are hidden (focus mode / CMD+.) */
+@@ -87,6 +89,7 @@ export function MainContentPanel({
+   const selectionCount = useSelectionCount()
+   const { clearMultiSelect } = useSessionSelection()
+   const sessionMetaMap = useAtomValue(sessionMetaMapAtom)
++  const sources = useAtomValue(sourcesAtom)
+   const automations = useAtomValue(automationsAtom)
+ 
+   // Execution history for the selected automation
+@@ -253,12 +256,19 @@ export function MainContentPanel({
+       )
+     }
+     if (navState.details) {
++      const sourceSlug = navState.details.sourceSlug
++      const selectedSource = sources.find(source => source.config.slug === sourceSlug)
++
+       return wrapWithStoplight(
+         <Panel variant="grow" className={className}>
+-          <SourceInfoPage
+-            sourceSlug={navState.details.sourceSlug}
+-            workspaceId={activeWorkspaceId || ''}
+-          />
++          {selectedSource && isRssMoldSource(selectedSource) ? (
++            <RssSourcePage source={selectedSource} />
++          ) : (
++            <SourceInfoPage
++              sourceSlug={sourceSlug}
++              workspaceId={activeWorkspaceId || ''}
++            />
++          )}
+         </Panel>
+       )
+     }
+diff --git a/apps/electron/src/renderer/pages/index.ts b/apps/electron/src/renderer/pages/index.ts
+index 12695b1..1dbd3fa 100644
+--- a/apps/electron/src/renderer/pages/index.ts
++++ b/apps/electron/src/renderer/pages/index.ts
+@@ -6,6 +6,7 @@
+ 
+ export { default as ChatPage } from './ChatPage'
+ export { default as SourceInfoPage } from './SourceInfoPage'
++export { default as RssSourcePage } from './RssSourcePage'
+ // Settings pages
+ export {
+   SettingsNavigator,
+diff --git a/apps/electron/src/shared/__tests__/ipc-channels.test.ts b/apps/electron/src/shared/__tests__/ipc-channels.test.ts
+index 137cdbb..2a89a4f 100644
+--- a/apps/electron/src/shared/__tests__/ipc-channels.test.ts
++++ b/apps/electron/src/shared/__tests__/ipc-channels.test.ts
+@@ -30,6 +30,7 @@ const EXPECTED_CHANNELS: string[] = [
+   'automations:changed',
+   'automations:delete',
+   'automations:duplicate',
++  'automations:get',
+   'automations:getHistory',
+   'automations:getLastExecuted',
+   'automations:replay',
+@@ -153,6 +154,9 @@ const EXPECTED_CHANNELS: string[] = [
+   'releaseNotes:get',
+   'releaseNotes:getLatestVersion',
+   'remote:testConnection',
++  'resources:export',
++  'resources:import',
++  'rss:fetchFeedText',
+   'server:createWorkspace',
+   'server:getActiveSessions',
+   'server:getHealth',
+@@ -239,6 +243,8 @@ const EXPECTED_CHANNELS: string[] = [
+   'theme:systemChanged',
+   'theme:workspaceThemeChanged',
+   'toolIcons:getMappings',
++  'tools:getBrowserToolEnabled',
++  'tools:setBrowserToolEnabled',
+   'update:available',
+   'update:check',
+   'update:dismiss',
+diff --git a/apps/electron/src/shared/types.ts b/apps/electron/src/shared/types.ts
+index abd785e..e42b302 100644
+--- a/apps/electron/src/shared/types.ts
++++ b/apps/electron/src/shared/types.ts
+@@ -642,6 +642,9 @@ export interface ElectronAPI {
+   // Resources (cross-workspace export/import)
+   exportResources(workspaceId: string, options: ExportResourcesOptions): Promise<ExportResult>
+   importResources(workspaceId: string, bundle: ResourceBundle, mode: ResourceImportMode): Promise<ResourceImportResult>
++
++  // RSS reader helpers
++  fetchRssFeedText(url: string): Promise<string>
+ }
+ 
+ // =============================================================================
+diff --git a/apps/electron/src/transport/channel-map.ts b/apps/electron/src/transport/channel-map.ts
+index d571911..f044c7e 100644
+--- a/apps/electron/src/transport/channel-map.ts
++++ b/apps/electron/src/transport/channel-map.ts
+@@ -377,4 +377,7 @@ export const CHANNEL_MAP = {
+   // Resources (cross-workspace export/import)
+   exportResources: invoke(RPC_CHANNELS.resources.EXPORT),
+   importResources: invoke(RPC_CHANNELS.resources.IMPORT),
++
++  // RSS reader helpers
++  fetchRssFeedText: invoke(RPC_CHANNELS.rss.FETCH_FEED_TEXT),
+ } satisfies ChannelMap
+diff --git a/packages/server-core/src/handlers/rpc/index.ts b/packages/server-core/src/handlers/rpc/index.ts
+index 6599972..e38b52d 100644
+--- a/packages/server-core/src/handlers/rpc/index.ts
++++ b/packages/server-core/src/handlers/rpc/index.ts
+@@ -8,6 +8,7 @@ import { registerLabelsHandlers } from './labels'
+ import { registerLlmConnectionsHandlers } from './llm-connections'
+ import { registerOAuthHandlers } from './oauth'
+ import { registerResourcesHandlers } from './resources'
++import { registerRssHandlers } from './rss'
+ import { registerOnboardingHandlers } from './onboarding'
+ import { registerSessionsHandlers } from './sessions'
+ export { registerSessionsHandlers, cleanupSessionFileWatchForClient } from './sessions'
+@@ -35,6 +36,7 @@ export function registerCoreRpcHandlers(
+   registerOAuthHandlers(server, deps)
+   registerOnboardingHandlers(server, deps)
+   registerResourcesHandlers(server, deps)
++  registerRssHandlers(server, deps)
+   registerSessionsHandlers(server, deps)
+   if (serverCtx) registerServerHandlers(server, deps, serverCtx)
+   registerSettingsHandlers(server, deps)
+diff --git a/packages/shared/src/protocol/channels.ts b/packages/shared/src/protocol/channels.ts
+index e8d0c18..1d3a5bf 100644
+--- a/packages/shared/src/protocol/channels.ts
++++ b/packages/shared/src/protocol/channels.ts
+@@ -365,6 +365,9 @@ export const RPC_CHANNELS = {
+     EXPORT: 'resources:export',
+     IMPORT: 'resources:import',
+   },
++  rss: {
++    FETCH_FEED_TEXT: 'rss:fetchFeedText',
++  },
+ } as const
+ 
+ // IPC_CHANNELS compat alias removed — all consumers now use RPC_CHANNELS
+diff --git a/packages/shared/src/protocol/routing.ts b/packages/shared/src/protocol/routing.ts
+index d94380f..3a42e5c 100644
+--- a/packages/shared/src/protocol/routing.ts
++++ b/packages/shared/src/protocol/routing.ts
+@@ -391,6 +391,9 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
+   // resources — workspace resource export/import
+   RPC_CHANNELS.resources.EXPORT,
+   RPC_CHANNELS.resources.IMPORT,
++
++  // rss — workspace reader helper fetches
++  RPC_CHANNELS.rss.FETCH_FEED_TEXT,
+ ])
+ 
+ // ---------------------------------------------------------------------------

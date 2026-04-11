@@ -377,4 +377,7 @@ export const CHANNEL_MAP = {
   // Resources (cross-workspace export/import)
   exportResources: invoke(RPC_CHANNELS.resources.EXPORT),
   importResources: invoke(RPC_CHANNELS.resources.IMPORT),
+
+  // RSS reader helpers
+  fetchRssFeedText: invoke(RPC_CHANNELS.rss.FETCH_FEED_TEXT),
 } satisfies ChannelMap

@@ -391,6 +391,9 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   // resources — workspace resource export/import
   RPC_CHANNELS.resources.EXPORT,
   RPC_CHANNELS.resources.IMPORT,
+
+  // rss — workspace reader helper fetches
+  RPC_CHANNELS.rss.FETCH_FEED_TEXT,
 ])
 
 // ---------------------------------------------------------------------------

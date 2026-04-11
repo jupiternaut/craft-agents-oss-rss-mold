@@ -642,6 +642,9 @@ export interface ElectronAPI {
   // Resources (cross-workspace export/import)
   exportResources(workspaceId: string, options: ExportResourcesOptions): Promise<ExportResult>
   importResources(workspaceId: string, bundle: ResourceBundle, mode: ResourceImportMode): Promise<ResourceImportResult>
+
+  // RSS reader helpers
+  fetchRssFeedText(url: string): Promise<string>
 }
 
 // =============================================================================

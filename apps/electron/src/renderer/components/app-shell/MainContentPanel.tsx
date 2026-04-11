@@ -22,6 +22,7 @@ import { Panel } from './Panel'
 import { MultiSelectPanel } from './MultiSelectPanel'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { sessionMetaMapAtom, type SessionMeta } from '@/atoms/sessions'
+import { sourcesAtom } from '@/atoms/sources'
 import { StoplightProvider } from '@/context/StoplightContext'
 import {
   useNavigationState,
@@ -35,13 +36,14 @@ import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelecti
 import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
 import { extractLabelId } from '@craft-agent/shared/labels'
 import type { SessionStatusId } from '@/config/session-status-config'
-import { SourceInfoPage, ChatPage } from '@/pages'
+import { ChatPage, RssSourcePage, SourceInfoPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
 import type { ExecutionEntry } from '../automations/types'
 import { automationsAtom } from '@/atoms/automations'
 import { SendResourceToWorkspaceDialog, type SendResourceType } from './SendResourceToWorkspaceDialog'
+import { isRssMoldSource } from '@/lib/rss-mold'
 
 export interface MainContentPanelProps {
   /** Whether both sidebar and navigator are hidden (focus mode / CMD+.) */
@@ -87,6 +89,7 @@ export function MainContentPanel({
   const selectionCount = useSelectionCount()
   const { clearMultiSelect } = useSessionSelection()
   const sessionMetaMap = useAtomValue(sessionMetaMapAtom)
+  const sources = useAtomValue(sourcesAtom)
   const automations = useAtomValue(automationsAtom)
 
   // Execution history for the selected automation
@@ -253,12 +256,19 @@ export function MainContentPanel({
       )
     }
     if (navState.details) {
+      const sourceSlug = navState.details.sourceSlug
+      const selectedSource = sources.find(source => source.config.slug === sourceSlug)
+
       return wrapWithStoplight(
         <Panel variant="grow" className={className}>
-          <SourceInfoPage
-            sourceSlug={navState.details.sourceSlug}
-            workspaceId={activeWorkspaceId || ''}
-          />
+          {selectedSource && isRssMoldSource(selectedSource) ? (
+            <RssSourcePage source={selectedSource} />
+          ) : (
+            <SourceInfoPage
+              sourceSlug={sourceSlug}
+              workspaceId={activeWorkspaceId || ''}
+            />
+          )}
         </Panel>
       )
     }

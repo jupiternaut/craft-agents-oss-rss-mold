@@ -365,6 +365,9 @@ export const RPC_CHANNELS = {
     EXPORT: 'resources:export',
     IMPORT: 'resources:import',
   },
+  rss: {
+    FETCH_FEED_TEXT: 'rss:fetchFeedText',
+  },
 } as const
 
 // IPC_CHANNELS compat alias removed — all consumers now use RPC_CHANNELS
