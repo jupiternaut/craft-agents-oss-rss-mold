@@ -424,6 +424,50 @@ client.onConnectionStateChanged((state) => {
 // i18n: sync language changes to main process (for native menus/dialogs)
 ;(api as ElectronAPI).changeLanguage = (lang: string) => ipcRenderer.invoke('i18n:changeLanguage', lang)
 
+// Flow-next task planning — direct IPC because this is a local filesystem UI.
+;(api as ElectronAPI).getGitRoot = (dirPath: string) => ipcRenderer.invoke('git:getRoot', dirPath)
+;(api as ElectronAPI).getGitInfo = (dirPath: string) => ipcRenderer.invoke('git:getInfo', dirPath)
+;(api as ElectronAPI).flowProjectCheckStatus = (workspaceRoot: string) => ipcRenderer.invoke('flow:project:check-status', workspaceRoot)
+;(api as ElectronAPI).flowProjectRegister = (workspaceRoot: string, workspaceId?: string) => ipcRenderer.invoke('flow:project:register', workspaceRoot, workspaceId)
+;(api as ElectronAPI).flowProjectUnregister = (workspaceRoot: string) => ipcRenderer.invoke('flow:project:unregister', workspaceRoot)
+;(api as ElectronAPI).flowReadProjectContext = (workspaceRoot: string) => ipcRenderer.invoke('flow:project:read-context', workspaceRoot)
+;(api as ElectronAPI).flowInit = (workspaceRoot: string) => ipcRenderer.invoke('flow:init', workspaceRoot)
+;(api as ElectronAPI).flowEpicsList = (workspaceRoot: string) => ipcRenderer.invoke('flow:epics:list', workspaceRoot)
+;(api as ElectronAPI).flowTasksList = (workspaceRoot: string, epicId: string) => ipcRenderer.invoke('flow:tasks:list', workspaceRoot, epicId)
+;(api as ElectronAPI).flowTaskShow = (workspaceRoot: string, taskId: string) => ipcRenderer.invoke('flow:task:show', workspaceRoot, taskId)
+;(api as ElectronAPI).flowTaskUpdateStatus = (workspaceRoot: string, taskId: string, status) => ipcRenderer.invoke('flow:task:update-status', workspaceRoot, taskId, status)
+;(api as ElectronAPI).flowEpicCreate = (workspaceRoot: string, title: string, branch?: string) => ipcRenderer.invoke('flow:epic:create', workspaceRoot, title, branch)
+;(api as ElectronAPI).flowEpicSetPlan = (workspaceRoot: string, epicId: string, content: string) => ipcRenderer.invoke('flow:epic:set-plan', workspaceRoot, epicId, content)
+;(api as ElectronAPI).flowEpicDelete = (workspaceRoot: string, epicId: string) => ipcRenderer.invoke('flow:epic:delete', workspaceRoot, epicId)
+;(api as ElectronAPI).flowUiStateRead = (workspaceRoot: string) => ipcRenderer.invoke('flow:ui-state:read', workspaceRoot)
+;(api as ElectronAPI).flowUiStateWrite = (workspaceRoot: string, state) => ipcRenderer.invoke('flow:ui-state:write', workspaceRoot, state)
+;(api as ElectronAPI).flowEpicPlan = (workspaceRoot: string, epicId: string) => ipcRenderer.invoke('flow:epic:plan', workspaceRoot, epicId)
+;(api as ElectronAPI).flowEpicPlanApprove = (workspaceRoot: string, epicId: string) => ipcRenderer.invoke('flow:epic:plan-approve', workspaceRoot, epicId)
+;(api as ElectronAPI).flowEpicChatSend = (workspaceRoot, epicId, commandType, message, history, registeredProjects) =>
+  ipcRenderer.invoke('flow:epic-chat:send', workspaceRoot, epicId, commandType, message, history, registeredProjects)
+;(api as ElectronAPI).flowEpicChatAbort = (workspaceRoot: string, epicId: string) => ipcRenderer.invoke('flow:epic-chat:abort', workspaceRoot, epicId)
+;(api as ElectronAPI).showFlowNotification = (payload) => ipcRenderer.invoke('flow:notification:show', payload)
+;(api as ElectronAPI).onFlowChanged = (callback) => {
+  const handler = (_event: unknown, workspaceRoot: string, payload: import('../shared/types').FlowChangedPayload) => callback(workspaceRoot, payload)
+  ipcRenderer.on('flow:changed', handler)
+  return () => ipcRenderer.removeListener('flow:changed', handler)
+}
+;(api as ElectronAPI).onFlowEpicChatStatus = (callback) => {
+  const handler = (_event: unknown, payload: import('../shared/types').FlowEpicChatStatusEvent) => callback(payload)
+  ipcRenderer.on('flow:epic-chat-status', handler)
+  return () => ipcRenderer.removeListener('flow:epic-chat-status', handler)
+}
+;(api as ElectronAPI).onFlowEpicPlanStatus = (callback) => {
+  const handler = (_event: unknown, payload: import('../shared/types').FlowPlanStatusEvent) => callback(payload)
+  ipcRenderer.on('flow:epic-plan-status', handler)
+  return () => ipcRenderer.removeListener('flow:epic-plan-status', handler)
+}
+;(api as ElectronAPI).onFlowNotificationNavigate = (callback) => {
+  const handler = (_event: unknown, payload: { type: import('../shared/types').FlowNotificationType; epicId?: string; taskId?: string }) => callback(payload)
+  ipcRenderer.on('flow:notification-navigate', handler)
+  return () => ipcRenderer.removeListener('flow:notification-navigate', handler)
+}
+
 // webUtils.getPathForFile: returns the absolute OS path of a File object obtained
 // from <input type="file"> or OS drag-drop. Returns null for Files fabricated from
 // Blobs (clipboard paste, web-drag) — those are content-only, no filesystem path.

@@ -113,12 +113,15 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isAutomationsNavigation,
+  isTasksNavigation,
   type NavigationState,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import { AutomationsListPanel } from "../automations/AutomationsListPanel"
+import { TasksNavigatorPanel } from "@/components/tasks/TasksNavigatorPanel"
+import { activeFlowProjectAtom } from "@/atoms/tasks-state"
 import { APP_EVENTS, AGENT_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
 import { useAutomations } from "@/hooks/useAutomations"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
@@ -827,6 +830,8 @@ function AppShellContent({
   }, [skills, setSkillsAtom])
   // Automations — state, handlers, loading, subscriptions
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId)
+  const activeFlowProject = useAtomValue(activeFlowProjectAtom)
+  const tasksWorkspaceRoot = activeFlowProject.path ?? activeWorkspace?.rootPath
 
   // Send to Workspace dialog state (driven by sendToWorkspaceAtom set from SessionMenu/BatchSessionMenu)
   const sendToWorkspaceIds = useAtomValue(sendToWorkspaceAtom)
@@ -1699,6 +1704,15 @@ function AppShellContent({
     navigate(routes.view.skills())
   }, [])
 
+  // Handler for tasks view
+  const handleTasksClick = useCallback(() => {
+    navigate(routes.view.tasks())
+  }, [])
+
+  const handleTaskEpicSelect = useCallback((epicId: string) => {
+    navigate(routes.view.epicDetail(epicId))
+  }, [])
+
   // Handlers for automations view
   const handleAutomationsClick = useCallback(() => {
     navigate(routes.view.automations())
@@ -1957,15 +1971,16 @@ function AppShellContent({
     }
     flattenTree(labelTree)
 
-    // 3. Sources, Skills, Settings
+    // 3. Sources, Skills, Tasks, Automations, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
+    result.push({ id: 'nav:tasks', type: 'nav', action: handleTasksClick })
     result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
     result.push({ id: 'nav:whats-new', type: 'nav', action: handleWhatsNewClick })
 
     return result
-  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
+  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleTasksClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -2094,6 +2109,9 @@ function AppShellContent({
         default: return t("sidebar.allAutomations")
       }
     }
+
+    // Tasks navigator
+    if (isTasksNavigation(navState)) return t("sidebar.tasks", "Tasks")
 
     // Settings navigator
     if (isSettingsNavigation(navState)) return t("sidebar.settings")
@@ -2425,10 +2443,17 @@ function AppShellContent({
                       },
                     },
                     {
+                      id: "nav:tasks",
+                      title: t("sidebar.tasks", "Tasks"),
+                      icon: ListTodo,
+                      variant: isTasksNavigation(navState) ? "default" : "ghost",
+                      onClick: handleTasksClick,
+                    },
+                    {
                       id: "nav:automations",
                       title: t("sidebar.automations"),
                       label: String(automations.length),
-                      icon: ListTodo,
+                      icon: Calendar,
                       variant: (isAutomationsNavigation(navState) && !automationFilter) ? "default" : "ghost",
                       onClick: handleAutomationsClick,
                       expandable: true,
@@ -3188,6 +3213,12 @@ function AppShellContent({
                 onDeleteAutomation={handleDeleteAutomation}
                 selectedAutomationId={isAutomationsNavigation(navState) && navState.details ? navState.details.automationId : null}
                 workspaceRootPath={activeWorkspace?.rootPath}
+              />
+            )}
+            {isTasksNavigation(navState) && (
+              <TasksNavigatorPanel
+                workspaceRoot={tasksWorkspaceRoot}
+                onEpicSelect={handleTaskEpicSelect}
               />
             )}
             {isSettingsNavigation(navState) && (

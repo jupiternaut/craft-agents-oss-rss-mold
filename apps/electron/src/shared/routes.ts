@@ -177,6 +177,18 @@ export const routes = {
     automationsAgentic: (automationId?: string) =>
       automationId ? `automations/agentic/automation/${automationId}` as const : 'automations/agentic' as const,
 
+    /** Tasks view (flow-next navigator). */
+    tasks: () => 'tasks' as const,
+
+    /** Epic detail in the Tasks view. */
+    epicDetail: (epicId: string) => `tasks/${epicId}` as const,
+
+    /** Task detail in the Tasks view. */
+    taskDetail: (epicId: string, taskId: string) => `tasks/${epicId}/${taskId}` as const,
+
+    /** Dependency graph for an epic in the Tasks view. */
+    taskGraph: (epicId: string) => `tasks/${epicId}/graph` as const,
+
     /** Settings view (settings navigator) - uses SettingsSubpage from registry */
     settings: (subpage?: SettingsSubpage) =>
       subpage

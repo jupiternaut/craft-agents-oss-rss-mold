@@ -35,7 +35,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'settings'
+export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'tasks' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -61,7 +61,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'sources', 'skills', 'automations', 'settings'
+  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'sources', 'skills', 'automations', 'tasks', 'settings'
 ]
 
 /**
@@ -197,6 +197,35 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
     return null
   }
 
+  // Tasks navigator - supports epic, task, and graph details.
+  if (first === 'tasks') {
+    if (segments.length === 1) {
+      return { navigator: 'tasks', details: null }
+    }
+
+    const epicId = segments[1]
+    if (!epicId) return null
+
+    if (segments[2] === 'graph') {
+      return {
+        navigator: 'tasks',
+        details: { type: 'graph', id: epicId },
+      }
+    }
+
+    if (segments[2]) {
+      return {
+        navigator: 'tasks',
+        details: { type: 'task', id: `${epicId}/${segments[2]}` },
+      }
+    }
+
+    return {
+      navigator: 'tasks',
+      details: { type: 'epic', id: epicId },
+    }
+  }
+
   // Sessions navigator (allSessions, flagged, state)
   let sessionFilter: SessionFilter
   let detailsStartIndex: number
@@ -287,6 +316,13 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     }
     if (!parsed.details) return base
     return `${base}/automation/${parsed.details.id}`
+  }
+
+  if (parsed.navigator === 'tasks') {
+    if (!parsed.details) return 'tasks'
+    if (parsed.details.type === 'graph') return `tasks/${parsed.details.id}/graph`
+    if (parsed.details.type === 'task') return `tasks/${parsed.details.id}`
+    return `tasks/${parsed.details.id}`
   }
 
   // Sessions navigator
@@ -410,6 +446,21 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'automations', params: {} }
     }
     return { type: 'view', name: 'automation-info', id: compound.details.id, params: {} }
+  }
+
+  // Tasks
+  if (compound.navigator === 'tasks') {
+    if (!compound.details) {
+      return { type: 'view', name: 'tasks', params: {} }
+    }
+    if (compound.details.type === 'task') {
+      const [epicId, taskId] = compound.details.id.split('/')
+      return { type: 'view', name: 'task-info', id: taskId, params: { epicId } }
+    }
+    if (compound.details.type === 'graph') {
+      return { type: 'view', name: 'task-graph', id: compound.details.id, params: {} }
+    }
+    return { type: 'view', name: 'epic-info', id: compound.details.id, params: {} }
   }
 
   // Sessions
@@ -547,6 +598,30 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  // Tasks
+  if (compound.navigator === 'tasks') {
+    if (!compound.details) {
+      return { navigator: 'tasks', details: null }
+    }
+    if (compound.details.type === 'task') {
+      const [epicId, taskId] = compound.details.id.split('/')
+      return {
+        navigator: 'tasks',
+        details: { type: 'task', epicId, taskId },
+      }
+    }
+    if (compound.details.type === 'graph') {
+      return {
+        navigator: 'tasks',
+        details: { type: 'graph', epicId: compound.details.id },
+      }
+    }
+    return {
+      navigator: 'tasks',
+      details: { type: 'epic', epicId: compound.details.id },
+    }
+  }
+
   // Sessions
   const filter = compound.sessionFilter || { kind: 'allSessions' as const }
   if (compound.details) {
@@ -624,6 +699,32 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
         }
       }
       return { navigator: 'automations', details: null }
+    case 'tasks':
+      return { navigator: 'tasks', details: null }
+    case 'epic-info':
+      if (parsed.id) {
+        return {
+          navigator: 'tasks',
+          details: { type: 'epic', epicId: parsed.id },
+        }
+      }
+      return { navigator: 'tasks', details: null }
+    case 'task-info':
+      if (parsed.id && parsed.params.epicId) {
+        return {
+          navigator: 'tasks',
+          details: { type: 'task', epicId: parsed.params.epicId, taskId: parsed.id },
+        }
+      }
+      return { navigator: 'tasks', details: null }
+    case 'task-graph':
+      if (parsed.id) {
+        return {
+          navigator: 'tasks',
+          details: { type: 'graph', epicId: parsed.id },
+        }
+      }
+      return { navigator: 'tasks', details: null }
     case 'session':
       if (parsed.id) {
         // Reconstruct filter from params
@@ -729,6 +830,22 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
       navigator: 'automations',
       automationFilter: state.filter ?? undefined,
       details: state.details ? { type: 'automation', id: state.details.automationId } : null,
+    }
+  }
+
+  if (state.navigator === 'tasks') {
+    if (!state.details) {
+      return { navigator: 'tasks', details: null }
+    }
+    if (state.details.type === 'task') {
+      return {
+        navigator: 'tasks',
+        details: { type: 'task', id: `${state.details.epicId}/${state.details.taskId}` },
+      }
+    }
+    return {
+      navigator: 'tasks',
+      details: { type: state.details.type, id: state.details.epicId },
     }
   }
 

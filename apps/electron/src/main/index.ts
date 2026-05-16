@@ -3,7 +3,8 @@
 import { loadShellEnv } from './shell-env'
 loadShellEnv()
 
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron'
+import { execFile } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import * as Sentry from '@sentry/electron/main'
@@ -67,7 +68,7 @@ setupI18n()
 const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
 Sentry.setUser({ id: machineId })
 
-import { join, delimiter } from 'path'
+import { basename, join, delimiter } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
@@ -102,6 +103,13 @@ import { setPerfEnabled, enableDebug } from '@craft-agent/shared/utils'
 import { registerPiModelResolver } from '@craft-agent/shared/config'
 import { getPiModelsForAuthProvider, getAllPiModels } from '@craft-agent/shared/config'
 import { initNotificationService, initBadgeIcon, initInstanceBadge, updateBadgeCount } from './notifications'
+import { FlowBridge } from './lib/flow-bridge'
+import { FlowWatcher } from './lib/flow-watcher'
+import { showFlowNotification, initFlowNotifications } from './lib/flow-notifications'
+import { abortChat, executeChat, type RegisteredProject } from './lib/epic-chat-agent'
+import { applyPlan, executePlan, type PlanResult } from './lib/planning-agent'
+import type { FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState } from '../shared/types'
+import type { TaskStatus } from '../shared/flow-schemas'
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
@@ -192,6 +200,9 @@ let browserPaneManager: BrowserPaneManager | null = null
 let oauthFlowStore: OAuthFlowStore | null = null
 let moduleSink: EventSink | null = null
 let moduleClientResolver: ((webContentsId: number) => string | undefined) | null = null
+const flowBridges = new Map<string, FlowBridge>()
+const flowWatchers = new Map<string, FlowWatcher>()
+const pendingFlowPlans = new Map<string, PlanResult>()
 
 // Messaging gateway: the bootstrap handle is created once sessionManager is
 // available (inside createHandlerDeps) and populated with the WS publisher
@@ -202,6 +213,83 @@ let messagingHandle: MessagingBootstrapHandle | null = null
 
 // Store pending deep link if app not ready yet (cold start)
 let pendingDeepLink: string | null = null
+
+function getFlowBridge(workspaceRoot: string): FlowBridge {
+  let bridge = flowBridges.get(workspaceRoot)
+  if (!bridge) {
+    bridge = new FlowBridge(workspaceRoot)
+    flowBridges.set(workspaceRoot, bridge)
+  }
+  return bridge
+}
+
+function getFlowWindows(): BrowserWindow[] {
+  return windowManager?.getAllWindows().map((managed) => managed.window) ?? BrowserWindow.getAllWindows()
+}
+
+function startFlowWatcher(workspaceRoot: string): void {
+  if (flowWatchers.has(workspaceRoot)) return
+  const watcher = new FlowWatcher(workspaceRoot, getFlowWindows)
+  flowWatchers.set(workspaceRoot, watcher)
+  watcher.start()
+}
+
+function stopFlowWatcher(workspaceRoot: string): void {
+  const watcher = flowWatchers.get(workspaceRoot)
+  if (!watcher) return
+  watcher.stop()
+  flowWatchers.delete(workspaceRoot)
+}
+
+function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow | null {
+  return BrowserWindow.fromWebContents(event.sender)
+    ?? windowManager?.getWindowByWebContentsId(event.sender.id)
+    ?? BrowserWindow.getFocusedWindow()
+    ?? BrowserWindow.getAllWindows()[0]
+    ?? null
+}
+
+function getPendingPlanKey(workspaceRoot: string, epicId: string): string {
+  return `${workspaceRoot}\0${epicId}`
+}
+
+function execGit(dirPath: string, args: string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', dirPath, ...args], { timeout: 5_000 }, (error, stdout) => {
+      if (error) {
+        resolve(null)
+        return
+      }
+      resolve(stdout.trim() || null)
+    })
+  })
+}
+
+async function getGitInfo(dirPath: string): Promise<FlowGitInfo> {
+  const root = await execGit(dirPath, ['rev-parse', '--show-toplevel'])
+  if (!root) {
+    return { isGitRepo: false, root: null, branch: null }
+  }
+  const branch = await execGit(dirPath, ['branch', '--show-current'])
+  return { isGitRepo: true, root, branch }
+}
+
+function readFlowProjectContext(workspaceRoot: string): FlowProjectContext {
+  try {
+    const packageJsonPath = join(workspaceRoot, 'package.json')
+    if (existsSync(packageJsonPath)) {
+      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { name?: string; description?: string }
+      return {
+        name: pkg.name || basename(workspaceRoot),
+        description: pkg.description,
+      }
+    }
+  } catch {
+    // Fall through to basename fallback.
+  }
+
+  return { name: basename(workspaceRoot) }
+}
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
 // Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Craft Agents [1]")
@@ -450,6 +538,7 @@ app.whenReady().then(async () => {
 
     // Initialize notification service (always — triggered by server push events)
     initNotificationService(windowManager)
+    initFlowNotifications(windowManager)
 
     // Initialize browser pane manager (always — even in headless, for deps wiring)
     browserPaneManager = new BrowserPaneManager()
@@ -874,6 +963,148 @@ app.whenReady().then(async () => {
         i18n.changeLanguage(lang)
         const { rebuildMenu } = await import('./menu')
         await rebuildMenu()
+      })
+
+      // Flow-next task planning bridge. These handlers are intentionally local:
+      // they operate on the user's filesystem and stream status directly to the
+      // renderer window that initiated the request.
+      ipcMain.handle('git:getRoot', async (_event, dirPath: string) => {
+        return await execGit(dirPath, ['rev-parse', '--show-toplevel'])
+      })
+
+      ipcMain.handle('git:getInfo', async (_event, dirPath: string) => {
+        return await getGitInfo(dirPath)
+      })
+
+      ipcMain.handle('flow:project:check-status', async (_event, workspaceRoot: string) => {
+        if (!workspaceRoot || !existsSync(workspaceRoot)) {
+          return { status: 'error', error: 'Project path does not exist' }
+        }
+        return {
+          status: existsSync(join(workspaceRoot, '.flow')) ? 'initialized' : 'needs-setup',
+        }
+      })
+
+      ipcMain.handle('flow:project:register', async (_event, workspaceRoot: string) => {
+        if (!workspaceRoot || !existsSync(workspaceRoot)) {
+          return { success: false, error: 'Project path does not exist' }
+        }
+        startFlowWatcher(workspaceRoot)
+        return { success: true }
+      })
+
+      ipcMain.handle('flow:project:unregister', async (_event, workspaceRoot: string) => {
+        stopFlowWatcher(workspaceRoot)
+        return { success: true }
+      })
+
+      ipcMain.handle('flow:project:read-context', async (_event, workspaceRoot: string) => {
+        return readFlowProjectContext(workspaceRoot)
+      })
+
+      ipcMain.handle('flow:init', async (_event, workspaceRoot: string) => {
+        const result = await getFlowBridge(workspaceRoot).init()
+        if (result.ok) startFlowWatcher(workspaceRoot)
+        return result
+      })
+
+      ipcMain.handle('flow:epics:list', async (_event, workspaceRoot: string) => {
+        return await getFlowBridge(workspaceRoot).listEpics()
+      })
+
+      ipcMain.handle('flow:tasks:list', async (_event, workspaceRoot: string, epicId: string) => {
+        return await getFlowBridge(workspaceRoot).listTasks(epicId)
+      })
+
+      ipcMain.handle('flow:task:show', async (_event, workspaceRoot: string, taskId: string) => {
+        return await getFlowBridge(workspaceRoot).showTask(taskId)
+      })
+
+      ipcMain.handle('flow:task:update-status', async (_event, workspaceRoot: string, taskId: string, status: TaskStatus) => {
+        return await getFlowBridge(workspaceRoot).updateTaskStatus(taskId, status)
+      })
+
+      ipcMain.handle('flow:epic:create', async (_event, workspaceRoot: string, title: string, branch?: string) => {
+        return await getFlowBridge(workspaceRoot).createEpic(title, branch)
+      })
+
+      ipcMain.handle('flow:epic:set-plan', async (_event, workspaceRoot: string, epicId: string, content: string) => {
+        return await getFlowBridge(workspaceRoot).setEpicPlan(epicId, content)
+      })
+
+      ipcMain.handle('flow:epic:delete', async (_event, workspaceRoot: string, epicId: string) => {
+        return await getFlowBridge(workspaceRoot).deleteEpic(epicId)
+      })
+
+      ipcMain.handle('flow:ui-state:read', async (_event, workspaceRoot: string) => {
+        return await getFlowBridge(workspaceRoot).readUiState()
+      })
+
+      ipcMain.handle('flow:ui-state:write', async (_event, workspaceRoot: string, state: FlowUiState) => {
+        return await getFlowBridge(workspaceRoot).writeUiState(state)
+      })
+
+      ipcMain.handle('flow:epic:plan', async (event, workspaceRoot: string, epicId: string) => {
+        const win = getSenderWindow(event)
+        if (!win) return { ok: false, error: 'No window available for planning status' }
+        try {
+          const result = await executePlan(workspaceRoot, epicId, win, getFlowBridge(workspaceRoot))
+          pendingFlowPlans.set(getPendingPlanKey(workspaceRoot, epicId), result)
+          return { ok: true, data: result }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'Failed to generate plan' }
+        }
+      })
+
+      ipcMain.handle('flow:epic:plan-approve', async (event, workspaceRoot: string, epicId: string) => {
+        const win = getSenderWindow(event)
+        if (!win) return { ok: false, error: 'No window available for planning status' }
+        const key = getPendingPlanKey(workspaceRoot, epicId)
+        const pendingPlan = pendingFlowPlans.get(key)
+        if (!pendingPlan) {
+          return { ok: false, error: 'No pending plan to approve. Run /plan first.' }
+        }
+        try {
+          await applyPlan(workspaceRoot, epicId, pendingPlan.tasks, getFlowBridge(workspaceRoot), win)
+          pendingFlowPlans.delete(key)
+          return { ok: true, data: { success: true } }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : 'Failed to approve plan' }
+        }
+      })
+
+      ipcMain.handle(
+        'flow:epic-chat:send',
+        async (
+          event,
+          workspaceRoot: string,
+          epicId: string,
+          commandType: FlowChatCommandType,
+          message: string,
+          history: FlowChatMessage[],
+          registeredProjects?: RegisteredProject[],
+        ) => {
+          const win = getSenderWindow(event)
+          if (!win) return { success: false, error: 'No window available for chat status' }
+          await executeChat({
+            workspaceRoot,
+            epicId,
+            commandType,
+            message,
+            history,
+            window: win,
+            registeredProjects,
+          })
+          return { success: true }
+        },
+      )
+
+      ipcMain.handle('flow:epic-chat:abort', async (_event, workspaceRoot: string, epicId: string) => {
+        return abortChat(workspaceRoot, epicId)
+      })
+
+      ipcMain.handle('flow:notification:show', async (_event, payload) => {
+        return showFlowNotification(payload)
       })
 
       ipcMain.on('__get-ws-port', (e) => {

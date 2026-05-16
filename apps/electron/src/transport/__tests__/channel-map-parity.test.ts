@@ -28,6 +28,31 @@ type ApiToChannelMapKeys = Exclude<
   | 'onTransferProgress' // direct IPC listener — chunk upload progress
   | 'changeLanguage' // direct IPC to main process — syncs i18n language
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
+  | 'getGitRoot' // direct IPC to main process — local git helper
+  | 'getGitInfo' // direct IPC to main process — local git helper
+  | 'flowProjectCheckStatus' // direct IPC to main process — local filesystem flow-next bridge
+  | 'flowProjectRegister'
+  | 'flowProjectUnregister'
+  | 'flowReadProjectContext'
+  | 'flowInit'
+  | 'flowEpicsList'
+  | 'flowTasksList'
+  | 'flowTaskShow'
+  | 'flowTaskUpdateStatus'
+  | 'flowEpicCreate'
+  | 'flowEpicSetPlan'
+  | 'flowEpicDelete'
+  | 'flowUiStateRead'
+  | 'flowUiStateWrite'
+  | 'flowEpicPlan'
+  | 'flowEpicPlanApprove'
+  | 'flowEpicChatSend'
+  | 'flowEpicChatAbort'
+  | 'showFlowNotification'
+  | 'onFlowChanged'
+  | 'onFlowEpicChatStatus'
+  | 'onFlowEpicPlanStatus'
+  | 'onFlowNotificationNavigate'
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

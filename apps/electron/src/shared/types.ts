@@ -212,6 +212,107 @@ import type {
   RemoteSessionTransferPayload,
   ImportRemoteSessionTransferResult,
 } from '@craft-agent/shared/protocol'
+import type {
+  CommandSuccess,
+  EpicCreateResponse,
+  EpicListResponse,
+  EpicSetPlanResponse,
+  FlowBridgeResult,
+  Task,
+  TaskListResponse,
+  TaskStatus,
+} from './flow-schemas'
+
+export type FlowProjectStatus = 'needs-setup' | 'initialized' | 'error'
+
+export interface FlowGitInfo {
+  isGitRepo: boolean
+  root: string | null
+  branch: string | null
+}
+
+export interface ActiveFlowProject {
+  path: string | null
+  flowStatus: FlowProjectStatus
+  gitInfo?: FlowGitInfo
+  error?: string
+}
+
+export interface RegisteredFlowProject {
+  path: string
+  name: string
+  addedAt: number
+}
+
+export interface FlowUiState {
+  openTabs?: string[]
+  activeTab?: string | null
+  viewModePerEpic?: Record<string, string>
+  welcomeDismissed?: boolean
+}
+
+export interface FlowProjectContext {
+  name?: string
+  description?: string
+}
+
+export interface FlowChangedPayload {
+  type: 'epic' | 'task' | 'config'
+  id?: string
+}
+
+export type FlowNotificationType =
+  | 'task_completed'
+  | 'epic_review_ready'
+  | 'flowctl_error'
+
+export interface FlowNotificationPayload {
+  type: FlowNotificationType
+  title: string
+  body: string
+  workspaceId: string
+  epicId?: string
+  taskId?: string
+  priority?: 'high' | 'low'
+}
+
+export type FlowChatCommandType = 'interview' | 'review' | 'chat'
+
+export interface FlowChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface FlowRegisteredProject {
+  path: string
+  name: string
+}
+
+export interface FlowPlanTask {
+  title: string
+  description: string
+  complexity: 'small' | 'medium' | 'large'
+  dependsOn: number[]
+  fileTargets: string[]
+}
+
+export interface FlowPlanResult {
+  epicId: string
+  tasks: FlowPlanTask[]
+  reasoning: string
+  estimatedTotal: string
+}
+
+export type FlowPlanStatusEvent =
+  | { epicId: string; type: 'progress'; message: string }
+  | { epicId: string; type: 'tasks'; tasks: FlowPlanTask[]; reasoning: string; estimatedTotal: string }
+  | { epicId: string; type: 'complete'; message: string }
+  | { epicId: string; type: 'error'; error: string }
+
+export type FlowEpicChatStatusEvent =
+  | { epicId: string; type: 'text_delta'; text: string }
+  | { epicId: string; type: 'text_complete' }
+  | { epicId: string; type: 'error'; errorType: string; message: string }
 
 export interface ElectronAPI {
   // Session management
@@ -582,6 +683,40 @@ export interface ElectronAPI {
 
   // Git operations
   getGitBranch(dirPath: string): Promise<string | null>
+  getGitRoot(dirPath: string): Promise<string | null>
+  getGitInfo(dirPath: string): Promise<FlowGitInfo | null>
+
+  // Flow-next task planning
+  flowProjectCheckStatus(workspaceRoot: string): Promise<{ status: FlowProjectStatus; error?: string }>
+  flowProjectRegister(workspaceRoot: string, workspaceId?: string): Promise<{ success: boolean; error?: string }>
+  flowProjectUnregister(workspaceRoot: string): Promise<{ success: boolean; error?: string }>
+  flowReadProjectContext(workspaceRoot: string): Promise<FlowProjectContext>
+  flowInit(workspaceRoot: string): Promise<FlowBridgeResult<CommandSuccess>>
+  flowEpicsList(workspaceRoot: string): Promise<FlowBridgeResult<EpicListResponse>>
+  flowTasksList(workspaceRoot: string, epicId: string): Promise<FlowBridgeResult<TaskListResponse>>
+  flowTaskShow(workspaceRoot: string, taskId: string): Promise<FlowBridgeResult<Task>>
+  flowTaskUpdateStatus(workspaceRoot: string, taskId: string, status: TaskStatus): Promise<FlowBridgeResult<CommandSuccess>>
+  flowEpicCreate(workspaceRoot: string, title: string, branch?: string): Promise<FlowBridgeResult<EpicCreateResponse>>
+  flowEpicSetPlan(workspaceRoot: string, epicId: string, content: string): Promise<FlowBridgeResult<EpicSetPlanResponse>>
+  flowEpicDelete(workspaceRoot: string, epicId: string): Promise<FlowBridgeResult<CommandSuccess>>
+  flowUiStateRead(workspaceRoot: string): Promise<FlowUiState | null>
+  flowUiStateWrite(workspaceRoot: string, state: FlowUiState): Promise<{ success: boolean; error?: string }>
+  flowEpicPlan(workspaceRoot: string, epicId: string): Promise<{ ok: true; data: FlowPlanResult } | { ok: false; error: string }>
+  flowEpicPlanApprove(workspaceRoot: string, epicId: string): Promise<{ ok: true; data: CommandSuccess } | { ok: false; error: string }>
+  flowEpicChatSend(
+    workspaceRoot: string,
+    epicId: string,
+    commandType: FlowChatCommandType,
+    message: string,
+    history: FlowChatMessage[],
+    registeredProjects?: FlowRegisteredProject[],
+  ): Promise<{ success: boolean; error?: string }>
+  flowEpicChatAbort(workspaceRoot: string, epicId: string): Promise<boolean>
+  showFlowNotification(payload: FlowNotificationPayload): Promise<boolean>
+  onFlowChanged(callback: (workspaceRoot: string, payload: FlowChangedPayload) => void): () => void
+  onFlowEpicChatStatus(callback: (event: FlowEpicChatStatusEvent) => void): () => void
+  onFlowEpicPlanStatus(callback: (event: FlowPlanStatusEvent) => void): () => void
+  onFlowNotificationNavigate(callback: (event: { type: FlowNotificationType; epicId?: string; taskId?: string }) => void): () => void
 
   // Git Bash (Windows)
   checkGitBash(): Promise<GitBashStatus>
@@ -852,6 +987,19 @@ export interface AutomationsNavigationState {
 }
 
 /**
+ * Tasks navigation state
+ */
+export interface TasksNavigationState {
+  navigator: 'tasks'
+  details:
+    | { type: 'epic'; epicId: string }
+    | { type: 'task'; epicId: string; taskId: string }
+    | { type: 'graph'; epicId: string }
+    | null
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state
  */
 export type NavigationState =
@@ -860,6 +1008,7 @@ export type NavigationState =
   | SettingsNavigationState
   | SkillsNavigationState
   | AutomationsNavigationState
+  | TasksNavigationState
 
 export const isSessionsNavigation = (
   state: NavigationState
@@ -880,6 +1029,10 @@ export const isSkillsNavigation = (
 export const isAutomationsNavigation = (
   state: NavigationState
 ): state is AutomationsNavigationState => state.navigator === 'automations'
+
+export const isTasksNavigation = (
+  state: NavigationState
+): state is TasksNavigationState => state.navigator === 'tasks'
 
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
   navigator: 'sessions',
@@ -905,6 +1058,18 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `automations/automation/${state.details.automationId}`
     }
     return 'automations'
+  }
+  if (state.navigator === 'tasks') {
+    if (state.details?.type === 'task') {
+      return `tasks/${state.details.epicId}/${state.details.taskId}`
+    }
+    if (state.details?.type === 'graph') {
+      return `tasks/${state.details.epicId}/graph`
+    }
+    if (state.details?.type === 'epic') {
+      return `tasks/${state.details.epicId}`
+    }
+    return 'tasks'
   }
   if (state.navigator === 'settings') {
     if (state.subpage === null) return 'settings'
@@ -952,6 +1117,20 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'automations', details: { type: 'automation', automationId } }
     }
     return { navigator: 'automations', details: null }
+  }
+
+  // Handle tasks
+  if (key === 'tasks') return { navigator: 'tasks', details: null }
+  if (key.startsWith('tasks/')) {
+    const [, epicId, tail] = key.split('/')
+    if (!epicId) return { navigator: 'tasks', details: null }
+    if (tail === 'graph') {
+      return { navigator: 'tasks', details: { type: 'graph', epicId } }
+    }
+    if (tail) {
+      return { navigator: 'tasks', details: { type: 'task', epicId, taskId: tail } }
+    }
+    return { navigator: 'tasks', details: { type: 'epic', epicId } }
   }
 
   // Handle settings

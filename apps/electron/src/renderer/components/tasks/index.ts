@@ -1,0 +1,40 @@
+/**
+ * Tasks Components
+ *
+ * Components for the Tasks navigator panel and task management UI.
+ */
+
+export { TasksNavigatorPanel } from './TasksNavigatorPanel'
+export { TasksEmptyState } from './TasksEmptyState'
+export { EpicListItem } from './EpicListItem'
+export { KanbanBoard } from './KanbanBoard'
+export { KanbanColumn } from './KanbanColumn'
+export { TaskCard, DraggableTaskCard } from './TaskCard'
+export { KanbanDragOverlay } from './KanbanDragOverlay'
+export { ListView } from './ListView'
+export { ViewModeSelector } from './ViewModeSelector'
+export { TasksMainContent } from './TasksMainContent'
+export { EpicTabBar } from './EpicTabBar'
+export { TaskDetailSlideOver } from './TaskDetailSlideOver'
+export { TaskSpecTab } from './TaskSpecTab'
+export { TaskDepsTab } from './TaskDepsTab'
+export { TaskActivityTab } from './TaskActivityTab'
+export { EpicCreationWizard } from './EpicCreationWizard'
+export { QuickEpicStep } from './QuickEpicStep'
+export { StandardInterviewStep } from './StandardInterviewStep'
+export { ComplexEpicStep } from './ComplexEpicStep'
+export { OnboardingWizard } from './OnboardingWizard'
+export { ErrorRecoveryPanel, isCircuitOpen, recordFailure, resetCircuit, resetAllCircuits, getFailureCount } from './ErrorRecoveryPanel'
+export type { OnboardingStep, OnboardingWizardProps } from './OnboardingWizard'
+export type { ErrorRecoveryPanelProps } from './ErrorRecoveryPanel'
+export type { TaskCardData } from './TaskCard'
+export type { DependencyTask } from './TaskDepsTab'
+export type { ViewMode } from '@/atoms/tasks-state'
+export type { EpicTemplate, WizardStep, EpicCreationWizardProps } from './EpicCreationWizard'
+export type { StandardEpicFormData, EpicComplexity } from './StandardInterviewStep'
+export type { ComplexEpicFormData } from './ComplexEpicStep'
+export type { QuickEpicFormData } from './QuickEpicStep'
+// Export Zod schemas for external validation
+export { quickEpicSchema } from './QuickEpicStep'
+export { standardEpicSchema, epicComplexitySchema } from './StandardInterviewStep'
+export { complexEpicSchema } from './ComplexEpicStep'
