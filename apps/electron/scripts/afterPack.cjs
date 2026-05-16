@@ -26,7 +26,8 @@ module.exports = async function afterPack(context) {
   }
 
   const appPath = context.appOutDir;
-  const resourcesDir = path.join(appPath, 'Craft Agents.app', 'Contents', 'Resources');
+  const appName = `${context.packager.appInfo.productFilename || context.packager.appInfo.productName}.app`;
+  const resourcesDir = path.join(appPath, appName, 'Contents', 'Resources');
   const precompiledAssets = path.join(context.packager.projectDir, 'resources', 'Assets.car');
 
   console.log(`afterPack: projectDir=${context.packager.projectDir}`);
