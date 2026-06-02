@@ -5,6 +5,7 @@ export type SkillCrewChannelId = string
 export type SkillCrewPlacement = Record<string, string>
 
 export const DEFAULT_SKILL_CREW_ROOMS = ['debate', 'design', 'build', 'policy'] as const
+export const GLOBAL_SKILL_CREW_ROOM = '0skill'
 
 export const skillCrewChannelAtom = atom<SkillCrewChannelId>('debate')
 export const skillCrewPlacementAtom = atom<SkillCrewPlacement>({})
@@ -39,4 +40,8 @@ export function inferSkillPhysicalFolderId(skill: LoadedSkill, folderIds: string
   }
 
   return null
+}
+
+export function isGlobalSkillCrewSkill(skill: LoadedSkill): boolean {
+  return skill.path.includes(`/skills/${GLOBAL_SKILL_CREW_ROOM}/${skill.slug}`)
 }

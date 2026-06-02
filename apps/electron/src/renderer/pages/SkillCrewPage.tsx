@@ -23,8 +23,10 @@ import { cn } from '@/lib/utils'
 import type { LoadedSkill } from '../../shared/types'
 import {
   DEFAULT_SKILL_CREW_ROOMS,
+  GLOBAL_SKILL_CREW_ROOM,
   inferSkillCrewRoomId,
   inferSkillPhysicalFolderId,
+  isGlobalSkillCrewSkill,
   skillCrewPlacementAtom,
 } from '@/atoms/skill-crew'
 
@@ -35,6 +37,7 @@ type CrewRole = {
   description: string
   skill?: LoadedSkill
   chairman?: boolean
+  global?: boolean
 }
 
 type CrewMessage = {
@@ -79,7 +82,9 @@ function buildRoles(skills: LoadedSkill[]): CrewRole[] {
     handle: `@${skill.slug}`,
     description: skill.metadata.description || '本地 Craft skill',
     skill,
+    global: skill.slug === 'skillcreator' || isGlobalSkillCrewSkill(skill),
   }))
+  const hasSkillCreator = loaded.some((role) => role.id === 'skillcreator')
 
   return [
     {
@@ -88,7 +93,15 @@ function buildRoles(skills: LoadedSkill[]): CrewRole[] {
       handle: '@董事长',
       description: '召集 skill、安排轮次、压缩分歧并给出下一步。',
       chairman: true,
+      global: true,
     },
+    ...(hasSkillCreator ? [] : [{
+      id: 'skillcreator',
+      name: 'skillcreator',
+      handle: '@skillcreator',
+      description: '把自然语言里的“人”提炼成可复用 skill。',
+      global: true,
+    }]),
     ...loaded,
   ]
 }
@@ -163,7 +176,7 @@ function buildBranchClipboardText(branch: CrewBranch) {
 }
 
 function roleBelongsToChannel(role: CrewRole, activeChannel: string, placement: Record<string, string>) {
-  if (role.chairman) {
+  if (role.chairman || role.global) {
     return true
   }
 
@@ -173,11 +186,12 @@ function roleBelongsToChannel(role: CrewRole, activeChannel: string, placement: 
 
   const knownFolderIds = Array.from(new Set([
     activeChannel,
+    GLOBAL_SKILL_CREW_ROOM,
     ...DEFAULT_SKILL_CREW_ROOMS,
     ...Object.values(placement),
   ]))
   const folderId = placement[role.id] ?? inferSkillPhysicalFolderId(role.skill, knownFolderIds) ?? inferSkillCrewRoomId(role.skill)
-  return folderId === activeChannel || activeChannel === 'chairman'
+  return folderId === activeChannel || folderId === GLOBAL_SKILL_CREW_ROOM || activeChannel === 'chairman'
 }
 
 function parseMentionState(value: string, cursor: number) {
@@ -696,7 +710,7 @@ export default function SkillCrewPage() {
               <Users className="h-4 w-4" />
               Members
               <span className="ml-auto rounded-[5px] bg-foreground/[0.06] px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                {roles.length + 1}
+                {mentionableRoles.length}
               </span>
             </div>
             <ScrollArea className="min-h-0 flex-1">
@@ -710,7 +724,7 @@ export default function SkillCrewPage() {
                     <div className="text-[11px] text-muted-foreground">owner</div>
                   </div>
                 </div>
-                {roles.map((role) => (
+                {mentionableRoles.map((role) => (
                   <div key={role.id} className="flex items-center gap-2 rounded-[7px] px-2 py-1.5">
                     {role.skill ? (
                       <SkillAvatar skill={role.skill} size="sm" />
