@@ -21,6 +21,12 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { SkillAvatar } from '@/components/ui/skill-avatar'
 import { cn } from '@/lib/utils'
 import type { LoadedSkill } from '../../shared/types'
+import {
+  DEFAULT_SKILL_CREW_ROOMS,
+  inferSkillCrewRoomId,
+  inferSkillPhysicalFolderId,
+  skillCrewPlacementAtom,
+} from '@/atoms/skill-crew'
 
 type CrewRole = {
   id: string
@@ -55,47 +61,6 @@ type ComposerFrame = {
   bottom: number
 }
 
-const fallbackRoles: CrewRole[] = [
-  {
-    id: 'skillcreator',
-    name: 'skillcreator',
-    handle: '@skillcreator',
-    description: '把模糊自然语言需求塑造成可复用的人格化 skill。',
-  },
-  {
-    id: 'decision-chatgpt',
-    name: 'decision-chatgpt',
-    handle: '@decision-chatgpt',
-    description: '用多角色辩论压测路线、风险和取舍。',
-  },
-  {
-    id: 'abductive-hermeneutic-reasoning',
-    name: 'abductive-hermeneutic-reasoning',
-    handle: '@归因',
-    description: '比较解释假设，在反馈中循环修正理解。',
-  },
-  {
-    id: 'kant-antinomies',
-    name: 'kant-antinomies',
-    handle: '@二律背反',
-    description: '把互相冲突但都合理的命题并置，逼出边界。',
-  },
-]
-
-const aliases: Record<string, string> = {
-  董事长: '__chairman__',
-  chairman: '__chairman__',
-  主席: '__chairman__',
-  女娲: 'skillcreator',
-  高级女娲: 'skillcreator',
-  决策: 'decision-chatgpt',
-  归因: 'abductive-hermeneutic-reasoning',
-  解释学循环: 'abductive-hermeneutic-reasoning',
-  二律背反: 'kant-antinomies',
-  康德: 'kant-antinomies',
-  muzero: 'muzero-decision-philosophy',
-}
-
 const channelLabels = {
   debate: 'debate',
   design: 'design',
@@ -108,16 +73,13 @@ function formatChannelLabel(channelId: string): string {
 }
 
 function buildRoles(skills: LoadedSkill[]): CrewRole[] {
-  const loaded = skills.slice(0, 12).map((skill): CrewRole => ({
+  const loaded = skills.map((skill): CrewRole => ({
     id: skill.slug,
     name: skill.metadata.name || skill.slug,
-    handle: `@${skill.metadata.name || skill.slug}`,
+    handle: `@${skill.slug}`,
     description: skill.metadata.description || '本地 Craft skill',
     skill,
   }))
-
-  const loadedIds = new Set(loaded.map((role) => role.id))
-  const mergedFallback = fallbackRoles.filter((role) => !loadedIds.has(role.id))
 
   return [
     {
@@ -128,7 +90,6 @@ function buildRoles(skills: LoadedSkill[]): CrewRole[] {
       chairman: true,
     },
     ...loaded,
-    ...mergedFallback,
   ]
 }
 
@@ -139,29 +100,12 @@ function formatTime() {
   }).format(new Date())
 }
 
-function parseMentionIds(text: string, roles: CrewRole[]) {
-  const lookup = new Map<string, string>()
-  for (const role of roles) {
-    lookup.set(role.id.toLocaleLowerCase(), role.id)
-    lookup.set(role.name.toLocaleLowerCase(), role.id)
-    lookup.set(role.handle.slice(1).toLocaleLowerCase(), role.id)
+function cleanSelectedPrompt(text: string, targets: CrewRole[]) {
+  let cleaned = text
+  for (const target of targets) {
+    cleaned = cleaned.replaceAll(target.handle, '')
   }
-  for (const [alias, id] of Object.entries(aliases)) {
-    lookup.set(alias.toLocaleLowerCase(), id)
-  }
-
-  const ids = new Set<string>()
-  const mentionRegex = /@([\p{L}\p{N}_-]{1,80})/gu
-  for (const match of text.matchAll(mentionRegex)) {
-    const raw = match[1].toLocaleLowerCase()
-    const id = lookup.get(raw)
-    if (id) ids.add(id)
-  }
-  return [...ids]
-}
-
-function cleanPrompt(text: string) {
-  return text.replace(/@[\p{L}\p{N}_-]{1,80}/gu, '').replace(/\s+/g, ' ').trim()
+  return cleaned.replace(/\s+/g, ' ').trim()
 }
 
 function makeAgentReply(role: CrewRole, prompt: string, quote?: CrewMessage): string {
@@ -178,8 +122,8 @@ function makeModelSelfReply(prompt: string, quote?: CrewMessage): string {
   const quoteLine = quote ? `我先接住引用里的上下文：“${quote.body.slice(0, 80)}”。` : ''
   return [
     quoteLine,
-    '未检测到 @skill，我按模型自身直接回答。',
-    `针对“${prompt || '这个议题'}”，我先给出通用判断；如果你 @ 某个 skill，我再切换到那个 skill 的角色边界和工作方式。`,
+    '未检测到从下拉菜单选中的 @skill，我按模型自身直接回答。手打 @ 文本不会触发 skill，避免输错名字误唤醒。',
+    `针对“${prompt || '这个议题'}”，我先给出通用判断；如果你从 @ 菜单选中某个 skill，我再切换到那个 skill 的角色边界和工作方式。`,
   ].filter(Boolean).join('\n')
 }
 
@@ -218,10 +162,47 @@ function buildBranchClipboardText(branch: CrewBranch) {
   return branch.messages.map(buildMessageClipboardText).join('\n\n---\n\n')
 }
 
+function roleBelongsToChannel(role: CrewRole, activeChannel: string, placement: Record<string, string>) {
+  if (role.chairman) {
+    return true
+  }
+
+  if (!role.skill) {
+    return false
+  }
+
+  const knownFolderIds = Array.from(new Set([
+    activeChannel,
+    ...DEFAULT_SKILL_CREW_ROOMS,
+    ...Object.values(placement),
+  ]))
+  const folderId = placement[role.id] ?? inferSkillPhysicalFolderId(role.skill, knownFolderIds) ?? inferSkillCrewRoomId(role.skill)
+  return folderId === activeChannel || activeChannel === 'chairman'
+}
+
+function parseMentionState(value: string, cursor: number) {
+  const beforeCursor = value.slice(0, cursor)
+  const match = beforeCursor.match(/(^|\s)@([\p{L}\p{N}_-]*)$/u)
+  if (!match || match.index === undefined) {
+    return null
+  }
+
+  const prefixLength = match[1]?.length ?? 0
+  const query = match[2] ?? ''
+  const start = match.index + prefixLength
+
+  return { start, query }
+}
+
 export default function SkillCrewPage() {
   const skills = useAtomValue(skillsAtom)
   const activeChannel = useAtomValue(skillCrewChannelAtom)
+  const skillPlacement = useAtomValue(skillCrewPlacementAtom)
   const roles = React.useMemo(() => buildRoles(skills), [skills])
+  const mentionableRoles = React.useMemo(
+    () => roles.filter((role) => roleBelongsToChannel(role, activeChannel, skillPlacement)),
+    [activeChannel, roles, skillPlacement],
+  )
   const [branches, setBranches] = React.useState<CrewBranch[]>(() => [
     { id: 'main', title: 'main', messages: seedMessages() },
   ])
@@ -229,16 +210,54 @@ export default function SkillCrewPage() {
   const [draft, setDraft] = React.useState('')
   const [quoteId, setQuoteId] = React.useState<string | undefined>()
   const [copiedId, setCopiedId] = React.useState<string | undefined>()
+  const [selectedTargetIds, setSelectedTargetIds] = React.useState<string[]>([])
+  const [mentionState, setMentionState] = React.useState<{ start: number; query: string } | null>(null)
+  const [mentionIndex, setMentionIndex] = React.useState(0)
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0]
   const messages = activeBranch?.messages ?? []
   const quote = messages.find((message) => message.id === quoteId)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const mainRef = React.useRef<HTMLElement | null>(null)
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
   const [composerFrame, setComposerFrame] = React.useState<ComposerFrame | undefined>()
+
+  const selectedTargets = React.useMemo(
+    () => selectedTargetIds
+      .map((id) => roles.find((role) => role.id === id))
+      .filter((role): role is CrewRole => Boolean(role)),
+    [roles, selectedTargetIds],
+  )
+
+  const filteredMentionRoles = React.useMemo(() => {
+    if (!mentionState) {
+      return []
+    }
+
+    const query = mentionState.query.toLocaleLowerCase()
+    const filtered = mentionableRoles.filter((role) => {
+      if (!query) return true
+      return (
+        role.id.toLocaleLowerCase().includes(query)
+        || role.name.toLocaleLowerCase().includes(query)
+        || role.handle.slice(1).toLocaleLowerCase().includes(query)
+      )
+    })
+
+    return filtered.slice(0, 8)
+  }, [mentionState, mentionableRoles])
 
   React.useEffect(() => {
     scrollRef.current?.scrollIntoView({ block: 'end' })
   }, [activeBranchId, messages.length])
+
+  React.useEffect(() => {
+    setMentionIndex(0)
+  }, [mentionState?.query, activeChannel])
+
+  React.useEffect(() => {
+    const availableIds = new Set(mentionableRoles.map((role) => role.id))
+    setSelectedTargetIds((current) => current.filter((id) => availableIds.has(id)))
+  }, [mentionableRoles])
 
   React.useLayoutEffect(() => {
     const updateFrame = () => {
@@ -272,6 +291,34 @@ export default function SkillCrewPage() {
     )))
   }, [activeBranchId])
 
+  const updateDraftAndMentionState = React.useCallback((value: string, cursor: number) => {
+    setDraft(value)
+    setMentionState(parseMentionState(value, cursor))
+  }, [])
+
+  const selectMentionRole = React.useCallback((role: CrewRole) => {
+    const textarea = textareaRef.current
+    const cursor = textarea?.selectionStart ?? draft.length
+    const state = mentionState ?? parseMentionState(draft, cursor)
+    if (!state) {
+      return
+    }
+
+    const before = draft.slice(0, state.start)
+    const after = draft.slice(cursor)
+    const insertion = `${role.handle} `
+    const nextDraft = `${before}${insertion}${after}`
+    const nextCursor = before.length + insertion.length
+
+    setDraft(nextDraft)
+    setMentionState(null)
+    setSelectedTargetIds((current) => current.includes(role.id) ? current : [...current, role.id])
+    window.requestAnimationFrame(() => {
+      textarea?.focus()
+      textarea?.setSelectionRange(nextCursor, nextCursor)
+    })
+  }, [draft, mentionState])
+
   const sendMessage = React.useCallback(() => {
     const text = draft.trim()
     if (!text) return
@@ -286,16 +333,19 @@ export default function SkillCrewPage() {
       quoteId,
     }
 
-    const mentionedIds = parseMentionIds(text, roles)
-    const prompt = cleanPrompt(text)
-    const hasChairman = mentionedIds.includes('__chairman__')
-    const explicitTargets = mentionedIds
+    const selectedIds = selectedTargetIds.filter((id) => roles.some((role) => role.id === id))
+    const selectedRoles = selectedIds
+      .map((id) => roles.find((role) => role.id === id))
+      .filter((role): role is CrewRole => Boolean(role))
+    const prompt = cleanSelectedPrompt(text, selectedRoles)
+    const hasChairman = selectedIds.includes('__chairman__')
+    const explicitTargets = selectedIds
       .filter((id) => id !== '__chairman__')
       .map((id) => roles.find((role) => role.id === id))
       .filter((role): role is CrewRole => Boolean(role))
 
     const targets = hasChairman
-      ? (explicitTargets.length > 0 ? explicitTargets : roles.filter((role) => !role.chairman).slice(0, 4))
+      ? (explicitTargets.length > 0 ? explicitTargets : mentionableRoles.filter((role) => !role.chairman).slice(0, 4))
       : explicitTargets
 
     const replies: CrewMessage[] = []
@@ -344,8 +394,10 @@ export default function SkillCrewPage() {
 
     updateActiveMessages((prev) => [...prev, userMessage, ...replies])
     setDraft('')
+    setMentionState(null)
+    setSelectedTargetIds([])
     setQuoteId(undefined)
-  }, [draft, quote, quoteId, roles, updateActiveMessages])
+  }, [draft, mentionableRoles, quote, quoteId, roles, selectedTargetIds, updateActiveMessages])
 
   const copyMessage = React.useCallback(async (message: CrewMessage) => {
     await navigator.clipboard.writeText(buildMessageClipboardText(message))
@@ -386,7 +438,7 @@ export default function SkillCrewPage() {
     ])
     setActiveBranchId(nextId)
     setQuoteId(message.id)
-    setDraft('@董事长 基于这个分支继续追问：')
+    setDraft('基于这个分支继续追问：')
   }, [branches.length, messages])
 
   return (
@@ -525,18 +577,105 @@ export default function SkillCrewPage() {
                   </button>
                 </div>
               )}
-              <div className="flex items-end gap-2 rounded-[8px] border border-border/70 bg-background shadow-minimal">
+              {selectedTargets.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {selectedTargets.map((target) => (
+                    <button
+                      key={target.id}
+                      type="button"
+                      onClick={() => setSelectedTargetIds((current) => current.filter((id) => id !== target.id))}
+                      className={cn(
+                        'inline-flex h-6 items-center gap-1 rounded-[5px] border px-2 text-xs transition-colors',
+                        target.chairman
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                          : 'border-foreground/15 bg-foreground/[0.06] text-foreground'
+                      )}
+                      title="点击移除这个唤醒目标"
+                    >
+                      {target.chairman ? <Crown className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
+                      {target.handle}
+                      <X className="h-3 w-3 opacity-60" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="relative flex items-end gap-2 rounded-[8px] border border-border/70 bg-background shadow-minimal">
+                {mentionState && filteredMentionRoles.length > 0 && (
+                  <div className="absolute bottom-[calc(100%+8px)] left-2 z-50 w-[min(360px,calc(100vw-80px))] overflow-hidden rounded-[8px] border border-border/70 bg-background shadow-lg">
+                    <div className="border-b border-border/50 px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                      #{formatChannelLabel(activeChannel)} local variables
+                    </div>
+                    <div className="max-h-64 overflow-auto p-1">
+                      {filteredMentionRoles.map((role, index) => {
+                        const isActive = index === mentionIndex
+                        const isSelected = selectedTargetIds.includes(role.id)
+                        return (
+                          <button
+                            key={role.id}
+                            type="button"
+                            onMouseEnter={() => setMentionIndex(index)}
+                            onClick={() => selectMentionRole(role)}
+                            className={cn(
+                              'flex w-full items-center gap-2 rounded-[6px] px-2 py-1.5 text-left transition-colors',
+                              isActive ? 'bg-foreground text-background' : 'hover:bg-foreground/[0.05]',
+                              isSelected && !isActive ? 'bg-foreground/[0.08]' : ''
+                            )}
+                          >
+                            <span className={cn(
+                              'grid size-7 shrink-0 place-items-center rounded-[6px]',
+                              role.chairman
+                                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                : isActive ? 'bg-background/15 text-background' : 'bg-muted text-muted-foreground'
+                            )}>
+                              {role.chairman ? <Crown className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium">{role.handle}</span>
+                              <span className={cn('block truncate text-[11px]', isActive ? 'text-background/70' : 'text-muted-foreground')}>
+                                {role.description}
+                              </span>
+                            </span>
+                            {isSelected && <Check className="h-3.5 w-3.5 shrink-0" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
                 <textarea
+                  ref={textareaRef}
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => updateDraftAndMentionState(event.target.value, event.target.selectionStart)}
                   onKeyDown={(event) => {
+                    if (mentionState && filteredMentionRoles.length > 0) {
+                      if (event.key === 'ArrowDown') {
+                        event.preventDefault()
+                        setMentionIndex((current) => (current + 1) % filteredMentionRoles.length)
+                        return
+                      }
+                      if (event.key === 'ArrowUp') {
+                        event.preventDefault()
+                        setMentionIndex((current) => (current - 1 + filteredMentionRoles.length) % filteredMentionRoles.length)
+                        return
+                      }
+                      if (event.key === 'Enter' || event.key === 'Tab') {
+                        event.preventDefault()
+                        selectMentionRole(filteredMentionRoles[mentionIndex] ?? filteredMentionRoles[0])
+                        return
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        setMentionState(null)
+                        return
+                      }
+                    }
                     if (event.key === 'Enter' && !event.shiftKey) {
                       event.preventDefault()
                       sendMessage()
                     }
                   }}
                   className="max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 outline-none placeholder:text-muted-foreground"
-                  placeholder="输入消息。@skill 调用对应 skill；不 @ 则用模型自身回答。"
+                  placeholder="输入 @ 从当前文件夹选择 skill；不选则用模型自身回答。"
                 />
                 <Button
                   type="button"

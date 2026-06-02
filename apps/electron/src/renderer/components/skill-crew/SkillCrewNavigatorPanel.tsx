@@ -11,17 +11,24 @@ import {
   FolderOpen,
   FolderPlus,
   Info,
+  Loader2,
   MoveRight,
   Pencil,
   Plus,
+  Save,
   Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { DEFAULT_SKILL_CREW_ROOMS, skillCrewChannelAtom } from '@/atoms/skill-crew'
+import {
+  DEFAULT_SKILL_CREW_ROOMS,
+  inferSkillCrewRoomId,
+  inferSkillPhysicalFolderId,
+  skillCrewChannelAtom,
+  skillCrewPlacementAtom,
+} from '@/atoms/skill-crew'
 import { skillsAtom } from '@/atoms/skills'
 import { useActiveWorkspace, useAppShellContext } from '@/context/AppShellContext'
-import { navigate, routes } from '@/lib/navigate'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -33,6 +40,16 @@ import {
   StyledContextMenuSubTrigger,
 } from '@/components/ui/styled-context-menu'
 import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
 
 import type { LoadedSkill, SkillFolder } from '../../../shared/types'
 
@@ -45,8 +62,6 @@ type CrewFolder = {
   parentId: string | null
   builtin?: boolean
 }
-
-type CrewSkillPlacement = Record<string, string>
 
 const ROOM_DESCRIPTIONS: Record<string, string> = {
   debate: '董事长主持的多 skill 辩论',
@@ -88,24 +103,6 @@ function sanitizeFolderName(value: string): string {
   )
 }
 
-function inferRoomId(skill: LoadedSkill): string {
-  const haystack = `${skill.slug} ${skill.path} ${skill.metadata.name ?? ''} ${skill.metadata.description ?? ''}`.toLowerCase()
-
-  if (/(design|frontend|css|gsap|anime|lottie|three|hyperframes|ui|visual)/.test(haystack)) {
-    return 'design'
-  }
-
-  if (/(decision|muzero|kant|abductive|hermeneutic|skillcreator|debate|reason)/.test(haystack)) {
-    return 'debate'
-  }
-
-  if (/(lark|policy|approval|okr|calendar|mail|slack|doc|sheet|wiki)/.test(haystack)) {
-    return 'policy'
-  }
-
-  return 'build'
-}
-
 function buildBuiltinFolders(workspaceRootPath?: string): CrewFolder[] {
   const crewRoot = workspaceRootPath ? `${workspaceRootPath}/skills` : '~/.agents/skills'
 
@@ -131,20 +128,6 @@ function folderFromSkillFolder(folder: SkillFolder): CrewFolder {
   }
 }
 
-function inferPhysicalFolderId(skill: LoadedSkill, folders: CrewFolder[]): string | null {
-  const candidates = folders
-    .filter((folder) => folder.relativePath)
-    .sort((a, b) => b.relativePath.length - a.relativePath.length)
-
-  for (const folder of candidates) {
-    if (skill.path.endsWith(`/skills/${folder.relativePath}/${skill.slug}`)) {
-      return folder.id
-    }
-  }
-
-  return null
-}
-
 function copyText(value: string, label: string): void {
   void navigator.clipboard.writeText(value)
   toast.success(`已复制${label}`)
@@ -165,10 +148,15 @@ export function SkillCrewNavigatorPanel() {
   const [activeChannel, setActiveChannel] = useAtom(skillCrewChannelAtom)
   const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set(['debate', 'design', 'build', 'policy']))
   const [customFolders, setCustomFolders] = React.useState<CrewFolder[]>([])
-  const [skillPlacement, setSkillPlacement] = React.useState<CrewSkillPlacement>({})
+  const [skillPlacement, setSkillPlacement] = useAtom(skillCrewPlacementAtom)
   const [draggingSkillSlug, setDraggingSkillSlug] = React.useState<string | null>(null)
   const [addSkillOpen, setAddSkillOpen] = React.useState(false)
   const [addSkillDefault, setAddSkillDefault] = React.useState('创建一个新的 Crew skill。')
+  const [inspectedSkillSlug, setInspectedSkillSlug] = React.useState<string | null>(null)
+  const [skillFileDraft, setSkillFileDraft] = React.useState('')
+  const [skillFilePathDraft, setSkillFilePathDraft] = React.useState('')
+  const [skillFileLoading, setSkillFileLoading] = React.useState(false)
+  const [skillFileSaving, setSkillFileSaving] = React.useState(false)
 
   const folders = React.useMemo(
     () => {
@@ -180,6 +168,11 @@ export function SkillCrewNavigatorPanel() {
   )
 
   const folderById = React.useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders])
+  const folderIds = React.useMemo(() => folders.map((folder) => folder.id), [folders])
+  const inspectedSkill = React.useMemo(
+    () => skills.find((skill) => skill.slug === inspectedSkillSlug) ?? null,
+    [inspectedSkillSlug, skills],
+  )
 
   const skillsByFolder = React.useMemo(() => {
     const groups = new Map<string, LoadedSkill[]>()
@@ -189,7 +182,7 @@ export function SkillCrewNavigatorPanel() {
     }
 
     for (const skill of skills) {
-      const folderId = skillPlacement[skill.slug] ?? inferPhysicalFolderId(skill, folders) ?? inferRoomId(skill)
+      const folderId = skillPlacement[skill.slug] ?? inferSkillPhysicalFolderId(skill, folderIds) ?? inferSkillCrewRoomId(skill)
       const target = groups.has(folderId) ? folderId : 'build'
       groups.get(target)?.push(skill)
     }
@@ -199,7 +192,7 @@ export function SkillCrewNavigatorPanel() {
     }
 
     return groups
-  }, [folders, skillPlacement, skills])
+  }, [folderIds, folders, skillPlacement, skills])
 
   const childFoldersByParent = React.useMemo(() => {
     const groups = new Map<string | null, CrewFolder[]>()
@@ -260,6 +253,64 @@ export function SkillCrewNavigatorPanel() {
       cancelled = true
     }
   }, [activeWorkspaceId])
+
+  React.useEffect(() => {
+    if (!activeWorkspaceId || !inspectedSkillSlug) {
+      setSkillFileDraft('')
+      setSkillFilePathDraft('')
+      return
+    }
+
+    let cancelled = false
+    setSkillFileLoading(true)
+    window.electronAPI.readSkillContent(activeWorkspaceId, inspectedSkillSlug, activeSessionWorkingDirectory)
+      .then((result) => {
+        if (cancelled) return
+        setSkillFileDraft(result.content)
+        setSkillFilePathDraft(result.path)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        toast.error(`读取 @${inspectedSkillSlug} 失败`, {
+          description: error instanceof Error ? error.message : String(error),
+        })
+      })
+      .finally(() => {
+        if (!cancelled) setSkillFileLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionWorkingDirectory, activeWorkspaceId, inspectedSkillSlug])
+
+  const saveInspectedSkill = React.useCallback(async () => {
+    if (!activeWorkspaceId || !inspectedSkill) {
+      return
+    }
+
+    setSkillFileSaving(true)
+    try {
+      await window.electronAPI.saveSkillContent(
+        activeWorkspaceId,
+        inspectedSkill.slug,
+        skillFileDraft,
+        activeSessionWorkingDirectory,
+      )
+      await refreshSkills()
+      toast.success(`已保存 @${inspectedSkill.slug}`)
+    } catch (error) {
+      toast.error(`保存 @${inspectedSkill.slug} 失败`, {
+        description: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      setSkillFileSaving(false)
+    }
+  }, [activeSessionWorkingDirectory, activeWorkspaceId, inspectedSkill, refreshSkills, skillFileDraft])
+
+  const openSkillInspector = React.useCallback((skill: LoadedSkill) => {
+    setInspectedSkillSlug(skill.slug)
+  }, [])
 
   const toggleFolder = React.useCallback((folderId: string) => {
     setExpanded((current) => {
@@ -582,6 +633,32 @@ export function SkillCrewNavigatorPanel() {
           </StyledContextMenuItem>
         </StyledContextMenuContent>
       </ContextMenu>
+
+      <SkillInspectorDialog
+        skill={inspectedSkill}
+        open={Boolean(inspectedSkill)}
+        fileContent={skillFileDraft}
+        filePath={skillFilePathDraft}
+        loading={skillFileLoading}
+        saving={skillFileSaving}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInspectedSkillSlug(null)
+          }
+        }}
+        onContentChange={setSkillFileDraft}
+        onSave={() => void saveInspectedSkill()}
+        onOpenExternal={() => {
+          if (inspectedSkill) {
+            void openSkillPath(inspectedSkill)
+          }
+        }}
+        onShowInFolder={() => {
+          if (inspectedSkill) {
+            void showSkillInFolder(inspectedSkill)
+          }
+        }}
+      />
     </div>
   )
 
@@ -600,6 +677,7 @@ export function SkillCrewNavigatorPanel() {
             }`}
             style={{ paddingLeft: 26 + depth * 18 }}
             onClick={() => setActiveChannel(folderId)}
+            onDoubleClick={() => openSkillInspector(skill)}
             onDragStart={(event) => {
               setDraggingSkillSlug(skill.slug)
               event.dataTransfer.setData('application/x-skill-slug', skill.slug)
@@ -619,7 +697,7 @@ export function SkillCrewNavigatorPanel() {
         </ContextMenuTrigger>
 
         <StyledContextMenuContent className="w-60">
-          <StyledContextMenuItem onSelect={() => navigate(routes.view.skills(skill.slug))}>
+          <StyledContextMenuItem onSelect={() => openSkillInspector(skill)}>
             <Info className="mr-2 size-4" />
             查看属性
           </StyledContextMenuItem>
@@ -659,4 +737,128 @@ export function SkillCrewNavigatorPanel() {
 function builtinOrder(id: string): number {
   const index = DEFAULT_SKILL_CREW_ROOMS.indexOf(id as (typeof DEFAULT_SKILL_CREW_ROOMS)[number])
   return index === -1 ? Number.MAX_SAFE_INTEGER : index
+}
+
+function inferCreatorLabel(skill: LoadedSkill, fileContent: string): string {
+  const creatorMatch = fileContent.match(/^creator:\s*(.+)$/m)
+  if (creatorMatch?.[1]?.trim()) {
+    return creatorMatch[1].trim()
+  }
+
+  if (skill.source === 'workspace') {
+    return 'workspace skill / 当前工作区文件'
+  }
+
+  if (skill.source === 'project') {
+    return 'project skill / 当前项目文件'
+  }
+
+  return 'global skill / ~/.agents/skills'
+}
+
+function SkillInspectorDialog({
+  skill,
+  open,
+  fileContent,
+  filePath,
+  loading,
+  saving,
+  onOpenChange,
+  onContentChange,
+  onSave,
+  onOpenExternal,
+  onShowInFolder,
+}: {
+  skill: LoadedSkill | null
+  open: boolean
+  fileContent: string
+  filePath: string
+  loading: boolean
+  saving: boolean
+  onOpenChange: (open: boolean) => void
+  onContentChange: (content: string) => void
+  onSave: () => void
+  onOpenExternal: () => void
+  onShowInFolder: () => void
+}) {
+  if (!skill) {
+    return null
+  }
+
+  const creator = inferCreatorLabel(skill, fileContent)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[84vh] max-w-[min(980px,calc(100vw-32px))] grid-rows-none flex-col gap-0 p-0">
+        <DialogHeader className="border-b border-border/60 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+              <Bot className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <DialogTitle className="truncate">@{skill.slug}</DialogTitle>
+              <DialogDescription className="mt-1 line-clamp-2">
+                {skill.metadata.description || '没有 description'}
+              </DialogDescription>
+            </div>
+            <span className="mt-0.5 shrink-0 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+              {SOURCE_LABELS[skill.source]}
+            </span>
+          </div>
+        </DialogHeader>
+
+        <div className="grid gap-3 border-b border-border/60 px-5 py-3 text-xs md:grid-cols-2">
+          <InspectorField label="创建者 / 来源" value={creator} />
+          <InspectorField label="Name" value={skill.metadata.name || skill.slug} />
+          <InspectorField label="Slug" value={skill.slug} />
+          <InspectorField label="SKILL.md" value={shortPath(filePath || skillFilePath(skill))} />
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col px-5 py-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Prompt / SKILL.md
+            </div>
+            {loading ? (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" />
+                loading
+              </span>
+            ) : null}
+          </div>
+          <Textarea
+            value={fileContent}
+            onChange={(event) => onContentChange(event.target.value)}
+            spellCheck={false}
+            className="min-h-0 flex-1 resize-none overflow-auto font-mono text-xs leading-5"
+            placeholder="正在读取 SKILL.md..."
+          />
+        </div>
+
+        <DialogFooter className="border-t border-border/60 px-5 py-3">
+          <Button type="button" variant="outline" onClick={onShowInFolder}>
+            <ExternalLink className="mr-2 size-4" />
+            Finder
+          </Button>
+          <Button type="button" variant="outline" onClick={onOpenExternal}>
+            <Pencil className="mr-2 size-4" />
+            外部编辑
+          </Button>
+          <Button type="button" onClick={onSave} disabled={loading || saving || !fileContent.trim()}>
+            {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function InspectorField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
+      <div className="truncate text-foreground/85" title={value}>{value}</div>
+    </div>
+  )
 }

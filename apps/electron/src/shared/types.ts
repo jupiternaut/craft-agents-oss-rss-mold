@@ -576,9 +576,11 @@ export interface ElectronAPI {
   // Skills
   getSkills(workspaceId: string, workingDirectory?: string): Promise<LoadedSkill[]>
   getSkillFiles?(workspaceId: string, skillSlug: string): Promise<SkillFile[]>
+  readSkillContent(workspaceId: string, skillSlug: string, workingDirectory?: string): Promise<{ content: string; path: string }>
   getSkillFolders(workspaceId: string): Promise<SkillFolder[]>
   createSkillFolder(workspaceId: string, folderPath: string): Promise<{ path: string }>
   moveSkill(workspaceId: string, skillSlug: string, targetFolderPath: string): Promise<LoadedSkill>
+  saveSkillContent(workspaceId: string, skillSlug: string, content: string, workingDirectory?: string): Promise<LoadedSkill>
   deleteSkill(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInEditor(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInFinder(workspaceId: string, skillSlug: string): Promise<void>

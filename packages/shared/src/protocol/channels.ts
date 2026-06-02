@@ -259,9 +259,11 @@ export const RPC_CHANNELS = {
   skills: {
     GET: 'skills:get',
     GET_FILES: 'skills:getFiles',
+    READ_CONTENT: 'skills:readContent',
     LIST_FOLDERS: 'skills:listFolders',
     CREATE_FOLDER: 'skills:createFolder',
     MOVE: 'skills:move',
+    SAVE_CONTENT: 'skills:saveContent',
     DELETE: 'skills:delete',
     OPEN_EDITOR: 'skills:openEditor',
     OPEN_FINDER: 'skills:openFinder',

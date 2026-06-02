@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { existsSync, readdirSync, statSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs'
 import { RPC_CHANNELS, type SkillFile } from '@craft-agent/shared/protocol'
 import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
 import type { RpcServer } from '@craft-agent/server-core/transport'
@@ -8,9 +8,11 @@ import type { HandlerDeps } from '../handler-deps'
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.skills.GET,
   RPC_CHANNELS.skills.GET_FILES,
+  RPC_CHANNELS.skills.READ_CONTENT,
   RPC_CHANNELS.skills.LIST_FOLDERS,
   RPC_CHANNELS.skills.CREATE_FOLDER,
   RPC_CHANNELS.skills.MOVE,
+  RPC_CHANNELS.skills.SAVE_CONTENT,
   RPC_CHANNELS.skills.DELETE,
   RPC_CHANNELS.skills.OPEN_EDITOR,
   RPC_CHANNELS.skills.OPEN_FINDER,
@@ -86,6 +88,22 @@ export function registerSkillsHandlers(server: RpcServer, deps: HandlerDeps): vo
     return scanDirectory(skillDir)
   })
 
+  // Read the raw SKILL.md file for in-app inspection/editing.
+  server.handle(RPC_CHANNELS.skills.READ_CONTENT, async (_ctx, workspaceId: string, skillSlug: string, workingDirectory?: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const effectiveWorkingDir = workingDirectory && existsSync(workingDirectory)
+      ? workingDirectory
+      : undefined
+    const { loadSkillBySlug } = await import('@craft-agent/shared/skills')
+    const skill = loadSkillBySlug(workspace.rootPath, skillSlug, effectiveWorkingDir)
+    if (!skill) throw new Error(`Skill not found: ${skillSlug}`)
+
+    const path = join(skill.path, 'SKILL.md')
+    return { content: readFileSync(path, 'utf-8'), path }
+  })
+
   // List workspace skill folders / Crew rooms under {workspace}/skills.
   server.handle(RPC_CHANNELS.skills.LIST_FOLDERS, async (_ctx, workspaceId: string) => {
     const workspace = getWorkspaceByNameOrId(workspaceId)
@@ -117,6 +135,31 @@ export function registerSkillsHandlers(server: RpcServer, deps: HandlerDeps): vo
 
     deps.platform.logger?.info(`Moved skill ${skillSlug} to ${targetFolderPath}`)
     return moved
+  })
+
+  // Save a skill SKILL.md file, including frontmatter and instructions.
+  server.handle(RPC_CHANNELS.skills.SAVE_CONTENT, async (_ctx, workspaceId: string, skillSlug: string, content: string, workingDirectory?: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      throw new Error('Skill content cannot be empty')
+    }
+
+    const effectiveWorkingDir = workingDirectory && existsSync(workingDirectory)
+      ? workingDirectory
+      : undefined
+    const { loadSkillBySlug, invalidateSkillsCache } = await import('@craft-agent/shared/skills')
+    const skill = loadSkillBySlug(workspace.rootPath, skillSlug, effectiveWorkingDir)
+    if (!skill) throw new Error(`Skill not found: ${skillSlug}`)
+
+    const skillFile = join(skill.path, 'SKILL.md')
+    writeFileSync(skillFile, content.endsWith('\n') ? content : `${content}\n`, 'utf-8')
+    invalidateSkillsCache()
+
+    const saved = loadSkillBySlug(workspace.rootPath, skillSlug, effectiveWorkingDir)
+    if (!saved) throw new Error(`Saved skill could not be reloaded: ${skillSlug}`)
+    deps.platform.logger?.info(`Saved skill content: ${skillSlug}`)
+    return saved
   })
 
   // Delete a skill from a workspace
