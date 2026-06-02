@@ -32,6 +32,7 @@ import {
   isSkillsNavigation,
   isAutomationsNavigation,
   isTasksNavigation,
+  isSkillCrewNavigation,
 } from '@/contexts/NavigationContext'
 import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelectionCount } from '@/hooks/useSession'
 import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
@@ -45,6 +46,7 @@ import type { ExecutionEntry } from '../automations/types'
 import { automationsAtom } from '@/atoms/automations'
 import { SendResourceToWorkspaceDialog, type SendResourceType } from './SendResourceToWorkspaceDialog'
 import { TasksPage } from '@/pages/TasksPage'
+import SkillCrewPage from '@/pages/SkillCrewPage'
 
 export interface MainContentPanelProps {
   /** Whether both sidebar and navigator are hidden (focus mode / CMD+.) */
@@ -358,6 +360,14 @@ export function MainContentPanel({
   }
 
   // Tasks navigator - flow-next epic/task board.
+  if (isSkillCrewNavigation(navState)) {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className ? `${className} min-h-0` : 'min-h-0'}>
+        <SkillCrewPage />
+      </Panel>
+    )
+  }
+
   if (isTasksNavigation(navState)) {
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>

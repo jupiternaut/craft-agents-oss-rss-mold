@@ -157,6 +157,9 @@ export const routes = {
       return `skills/skill/${skillSlug}` as const
     },
 
+    /** Skill Crew workspace: channel UI for @skill orchestration and chairman-led debate. */
+    skillCrew: () => 'skill-crew' as const,
+
     /** Automations view (automations navigator) - supports type filtering */
     automations: (params?: { automationId?: string; type?: 'scheduled' | 'event' | 'agentic' }) => {
       const { automationId, type } = params ?? {}

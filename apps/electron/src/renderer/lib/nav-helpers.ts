@@ -32,5 +32,7 @@ export function isDetailNavState(navState: NavigationState | null): boolean {
     case 'automations':
     case 'tasks':
       return navState.details !== null
+    case 'skillCrew':
+      return false
   }
 }

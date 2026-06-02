@@ -57,3 +57,18 @@ export interface LoadedSkill {
   /** Where this skill was loaded from */
   source: SkillSource;
 }
+
+/**
+ * A physical folder under {workspace}/skills used as a Crew room.
+ * Skill directories themselves are excluded from this list.
+ */
+export interface SkillFolder {
+  /** Folder display name */
+  name: string;
+  /** Slash-separated path relative to {workspace}/skills */
+  relativePath: string;
+  /** Parent folder relative path, null for a direct child of {workspace}/skills */
+  parentPath: string | null;
+  /** Absolute path to the physical folder */
+  path: string;
+}

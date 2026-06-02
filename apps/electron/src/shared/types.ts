@@ -60,8 +60,8 @@ import type { LoadedSource, FolderSourceConfig, SourceConnectionStatus } from '@
 export type { LoadedSource, FolderSourceConfig, SourceConnectionStatus };
 
 // Skill types
-import type { LoadedSkill, SkillMetadata } from '@craft-agent/shared/skills/types';
-export type { LoadedSkill, SkillMetadata };
+import type { LoadedSkill, SkillFolder, SkillMetadata } from '@craft-agent/shared/skills/types';
+export type { LoadedSkill, SkillFolder, SkillMetadata };
 
 // Resource bundle types (cross-workspace export/import)
 import type { ExportResourcesOptions, ExportResult, ResourceImportMode, ResourceBundle, ResourceImportResult } from '@craft-agent/shared/resources';
@@ -576,6 +576,9 @@ export interface ElectronAPI {
   // Skills
   getSkills(workspaceId: string, workingDirectory?: string): Promise<LoadedSkill[]>
   getSkillFiles?(workspaceId: string, skillSlug: string): Promise<SkillFile[]>
+  getSkillFolders(workspaceId: string): Promise<SkillFolder[]>
+  createSkillFolder(workspaceId: string, folderPath: string): Promise<{ path: string }>
+  moveSkill(workspaceId: string, skillSlug: string, targetFolderPath: string): Promise<LoadedSkill>
   deleteSkill(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInEditor(workspaceId: string, skillSlug: string): Promise<void>
   openSkillInFinder(workspaceId: string, skillSlug: string): Promise<void>
@@ -1000,6 +1003,15 @@ export interface TasksNavigationState {
 }
 
 /**
+ * Skill Crew navigation state
+ */
+export interface SkillCrewNavigationState {
+  navigator: 'skillCrew'
+  details: null
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state
  */
 export type NavigationState =
@@ -1009,6 +1021,7 @@ export type NavigationState =
   | SkillsNavigationState
   | AutomationsNavigationState
   | TasksNavigationState
+  | SkillCrewNavigationState
 
 export const isSessionsNavigation = (
   state: NavigationState
@@ -1033,6 +1046,10 @@ export const isAutomationsNavigation = (
 export const isTasksNavigation = (
   state: NavigationState
 ): state is TasksNavigationState => state.navigator === 'tasks'
+
+export const isSkillCrewNavigation = (
+  state: NavigationState
+): state is SkillCrewNavigationState => state.navigator === 'skillCrew'
 
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
   navigator: 'sessions',
@@ -1070,6 +1087,9 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `tasks/${state.details.epicId}`
     }
     return 'tasks'
+  }
+  if (state.navigator === 'skillCrew') {
+    return 'skill-crew'
   }
   if (state.navigator === 'settings') {
     if (state.subpage === null) return 'settings'
@@ -1132,6 +1152,9 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
     }
     return { navigator: 'tasks', details: { type: 'epic', epicId } }
   }
+
+  // Handle skill crew
+  if (key === 'skill-crew') return { navigator: 'skillCrew', details: null }
 
   // Handle settings
   if (key === 'settings') return { navigator: 'settings', subpage: null }

@@ -11,6 +11,7 @@
  *   craftagents://state/{stateId}[/session/{sessionId}]     - Session list (state filter)
  *   craftagents://sources[/source/{sourceSlug}]          - Sources list
  *   craftagents://settings[/{subpage}]                   - Settings (general, shortcuts, preferences)
+ *   craftagents://skill-crew                             - Skill Crew workspace
  *
  * Action format:
  *   craftagents://action/{actionName}[/{id}][?params]
@@ -115,7 +116,7 @@ export function parseDeepLink(url: string): DeepLinkTarget | null {
 
     // Compound route prefixes
     const COMPOUND_ROUTE_PREFIXES = [
-      'allSessions', 'flagged', 'state', 'sources', 'settings', 'skills'
+      'allSessions', 'flagged', 'state', 'sources', 'settings', 'skills', 'skill-crew'
     ]
 
     // craftagents://allSessions/..., craftagents://settings/..., etc. (compound routes)

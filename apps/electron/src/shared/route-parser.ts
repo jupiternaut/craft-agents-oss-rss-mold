@@ -35,7 +35,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'tasks' | 'settings'
+export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'tasks' | 'skillCrew' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -61,7 +61,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'sources', 'skills', 'automations', 'tasks', 'settings'
+  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'sources', 'skills', 'automations', 'tasks', 'skill-crew', 'settings'
 ]
 
 /**
@@ -93,6 +93,11 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
   if (segments.length === 0) return null
 
   const first = segments[0]
+
+  // Skill Crew navigator
+  if (first === 'skill-crew') {
+    return { navigator: 'skillCrew', details: null }
+  }
 
   // Settings navigator
   if (first === 'settings') {
@@ -325,6 +330,10 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     return `tasks/${parsed.details.id}`
   }
 
+  if (parsed.navigator === 'skillCrew') {
+    return 'skill-crew'
+  }
+
   // Sessions navigator
   let base: string
   const filter = parsed.sessionFilter
@@ -461,6 +470,11 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'task-graph', id: compound.details.id, params: {} }
     }
     return { type: 'view', name: 'epic-info', id: compound.details.id, params: {} }
+  }
+
+  // Skill Crew
+  if (compound.navigator === 'skillCrew') {
+    return { type: 'view', name: 'skill-crew', params: {} }
   }
 
   // Sessions
@@ -622,6 +636,11 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  // Skill Crew
+  if (compound.navigator === 'skillCrew') {
+    return { navigator: 'skillCrew', details: null }
+  }
+
   // Sessions
   const filter = compound.sessionFilter || { kind: 'allSessions' as const }
   if (compound.details) {
@@ -701,6 +720,8 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
       return { navigator: 'automations', details: null }
     case 'tasks':
       return { navigator: 'tasks', details: null }
+    case 'skill-crew':
+      return { navigator: 'skillCrew', details: null }
     case 'epic-info':
       if (parsed.id) {
         return {
@@ -847,6 +868,10 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
       navigator: 'tasks',
       details: { type: state.details.type, id: state.details.epicId },
     }
+  }
+
+  if (state.navigator === 'skillCrew') {
+    return { navigator: 'skillCrew', details: null }
   }
 
   // Sessions

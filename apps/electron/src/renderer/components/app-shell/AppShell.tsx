@@ -32,6 +32,7 @@ import {
   Bot,
   Info,
   MailOpen,
+  Crown,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -114,6 +115,7 @@ import {
   isSkillsNavigation,
   isAutomationsNavigation,
   isTasksNavigation,
+  isSkillCrewNavigation,
   type NavigationState,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
@@ -121,6 +123,7 @@ import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import { AutomationsListPanel } from "../automations/AutomationsListPanel"
 import { TasksNavigatorPanel } from "@/components/tasks/TasksNavigatorPanel"
+import { SkillCrewNavigatorPanel } from "@/components/skill-crew/SkillCrewNavigatorPanel"
 import { activeFlowProjectAtom } from "@/atoms/tasks-state"
 import { APP_EVENTS, AGENT_EVENTS, type AutomationFilterKind, AUTOMATION_TYPE_TO_FILTER_KIND } from "../automations/types"
 import { useAutomations } from "@/hooks/useAutomations"
@@ -1709,6 +1712,10 @@ function AppShellContent({
     navigate(routes.view.tasks())
   }, [])
 
+  const handleSkillCrewClick = useCallback(() => {
+    navigate(routes.view.skillCrew())
+  }, [])
+
   const handleTaskEpicSelect = useCallback((epicId: string) => {
     navigate(routes.view.epicDetail(epicId))
   }, [])
@@ -1974,13 +1981,14 @@ function AppShellContent({
     // 3. Sources, Skills, Tasks, Automations, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
+    result.push({ id: 'nav:skillCrew', type: 'nav', action: handleSkillCrewClick })
     result.push({ id: 'nav:tasks', type: 'nav', action: handleTasksClick })
     result.push({ id: 'nav:automations', type: 'nav', action: handleAutomationsClick })
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick() })
     result.push({ id: 'nav:whats-new', type: 'nav', action: handleWhatsNewClick })
 
     return result
-  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleTasksClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
+  }, [handleAllSessionsClick, handleFlaggedClick, handleArchivedClick, handleSessionStatusClick, effectiveSessionStatuses, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleSkillCrewClick, handleTasksClick, handleAutomationsClick, handleSettingsClick, handleWhatsNewClick])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -2112,6 +2120,8 @@ function AppShellContent({
 
     // Tasks navigator
     if (isTasksNavigation(navState)) return t("sidebar.tasks", "Tasks")
+
+    if (isSkillCrewNavigation(navState)) return t("sidebar.skillCrew", "Skill Crew")
 
     // Settings navigator
     if (isSettingsNavigation(navState)) return t("sidebar.settings")
@@ -2441,6 +2451,13 @@ function AppShellContent({
                         type: 'skills',
                         onAddSkill: openAddSkill,
                       },
+                    },
+                    {
+                      id: "nav:skillCrew",
+                      title: t("sidebar.skillCrew", "Skill Crew"),
+                      icon: Crown,
+                      variant: isSkillCrewNavigation(navState) ? "default" : "ghost",
+                      onClick: handleSkillCrewClick,
                     },
                     {
                       id: "nav:tasks",
@@ -3220,6 +3237,9 @@ function AppShellContent({
                 workspaceRoot={tasksWorkspaceRoot}
                 onEpicSelect={handleTaskEpicSelect}
               />
+            )}
+            {isSkillCrewNavigation(navState) && (
+              <SkillCrewNavigatorPanel />
             )}
             {isSettingsNavigation(navState) && (
               /* Settings Navigator */
