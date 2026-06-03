@@ -980,6 +980,7 @@ async function recordSkillMomentFeedback(args: SkillMomentFeedbackRecordInput): 
     prompt: args.prompt,
     response: args.messageBody,
     sources: args.sources ?? [],
+    sourceLinks: args.sourceLinks ?? (args.sources ?? []).map((source) => source.url),
   }
 
   await appendJsonlRecord(feedbackPath, record)

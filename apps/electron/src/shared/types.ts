@@ -435,6 +435,7 @@ export type SkillMomentFeedbackRecordInput = {
   messageBody: string
   prompt?: string
   sources?: SkillMomentSourceDigest[]
+  sourceLinks?: string[]
   recordedAt?: string
 }
 

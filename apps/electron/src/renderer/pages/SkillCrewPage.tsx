@@ -886,6 +886,7 @@ export default function SkillCrewPage() {
         messageBody,
         prompt: target.kind === 'critique' ? 'AgentOS critic feedback' : 'AgentOS moment feedback',
         sources: target.moment.sources,
+        sourceLinks: target.moment.sources.map((source) => source.url),
         recordedAt: new Date().toISOString(),
       })
       updateSkillMomentFeedback(target, verdict, result.path)
