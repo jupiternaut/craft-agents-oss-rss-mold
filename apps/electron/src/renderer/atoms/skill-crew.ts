@@ -4,7 +4,7 @@ import type { LoadedSkill } from '../../shared/types'
 export type SkillCrewChannelId = string
 export type SkillCrewPlacement = Record<string, string>
 
-export const DEFAULT_SKILL_CREW_ROOMS = ['debate', 'design', 'build', 'policy'] as const
+export const DEFAULT_SKILL_CREW_ROOMS = ['debate', 'design', 'build', 'policy', 'screenplay'] as const
 export const GLOBAL_SKILL_CREW_ROOM = '0skill'
 
 export const skillCrewChannelAtom = atom<SkillCrewChannelId>('debate')
@@ -23,6 +23,10 @@ export function inferSkillCrewRoomId(skill: LoadedSkill): SkillCrewChannelId {
 
   if (/(lark|policy|approval|okr|calendar|mail|slack|doc|sheet|wiki)/.test(haystack)) {
     return 'policy'
+  }
+
+  if (/(screenplay|screenwriter|showrunner|script|fountain|dialogue|scene|character|continuity|rewrite)/.test(haystack)) {
+    return 'screenplay'
   }
 
   return 'build'

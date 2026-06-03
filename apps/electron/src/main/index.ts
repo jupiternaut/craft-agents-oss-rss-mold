@@ -96,6 +96,7 @@ import { ensureToolIcons, ensurePresetThemes } from '@craft-agent/shared/config'
 import { setBundledAssetsRoot } from '@craft-agent/shared/utils'
 import { initializeBackendHostRuntime } from '@craft-agent/shared/agent/backend'
 import { setPowerShellValidatorRoot } from '@craft-agent/shared/agent'
+import { WRITER_ROOM_ID, type WriterArtifactKind, type WriterRoomPhase } from '@craft-agent/shared/writer-room'
 import { handleDeepLink } from './deep-link'
 import { BrowserPaneManager } from './browser-pane-manager'
 import { OAuthFlowStore } from '@craft-agent/shared/auth'
@@ -115,6 +116,14 @@ import type { TaskStatus } from '../shared/flow-schemas'
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
+import { getSkillCrewRoomPolicy, normalizeSkillMomentSlug } from './skill-crew/room-policies'
+import {
+  buildWriterRoomCritiqueBody,
+  buildWriterRoomMockMomentBody,
+  buildWriterRoomMomentPlans,
+  WRITER_ROOM_MOCK_PHASES,
+  writerArtifactTag,
+} from './skill-crew/writer-room-mock'
 
 // Initialize electron-log for renderer process support
 log.initialize()
@@ -642,65 +651,6 @@ function clampGraphemes(text: string, maxLength: number): string {
   return chars.slice(0, maxLength).join('')
 }
 
-function normalizeSkillMomentSlug(skill: Pick<SkillMomentSkillInput, 'id' | 'name' | 'handle'>): string {
-  const raw = skill.handle?.replace(/^@/, '') || skill.id || skill.name
-  return raw.trim().toLocaleLowerCase()
-}
-
-function orderSkillMomentParticipants(skills: SkillMomentSkillInput[], roomId: string): SkillMomentSkillInput[] {
-  if (roomId !== 'debate') {
-    return skills
-  }
-
-  const priority = new Map([
-    ['homelander', 0],
-    ['butcher', 1],
-  ])
-
-  return skills
-    .map((skill, index) => ({ skill, index }))
-    .sort((left, right) => {
-      const leftPriority = priority.get(normalizeSkillMomentSlug(left.skill)) ?? Number.MAX_SAFE_INTEGER
-      const rightPriority = priority.get(normalizeSkillMomentSlug(right.skill)) ?? Number.MAX_SAFE_INTEGER
-      if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority
-      }
-      return left.index - right.index
-    })
-    .map(({ skill }) => skill)
-}
-
-const AUTO_MOMENT_EXCLUDED_SKILL_SLUGS = new Set(['skillcreator', 'chairman', '__chairman__', 'hafuke'])
-
-function shouldAutoIncludeSkillMomentParticipant(skill: SkillMomentSkillInput): boolean {
-  return !AUTO_MOMENT_EXCLUDED_SKILL_SLUGS.has(normalizeSkillMomentSlug(skill))
-}
-
-function orderSkillMomentCritics(author: SkillMomentSkillInput, critics: SkillMomentSkillInput[]): SkillMomentSkillInput[] {
-  const authorSlug = normalizeSkillMomentSlug(author)
-  const targetSlug = authorSlug === 'homelander'
-    ? 'butcher'
-    : authorSlug === 'butcher'
-      ? 'homelander'
-      : null
-
-  if (!targetSlug) {
-    return critics
-  }
-
-  return critics
-    .map((skill, index) => ({ skill, index }))
-    .sort((left, right) => {
-      const leftPriority = normalizeSkillMomentSlug(left.skill) === targetSlug ? 0 : 1
-      const rightPriority = normalizeSkillMomentSlug(right.skill) === targetSlug ? 0 : 1
-      if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority
-      }
-      return left.index - right.index
-    })
-    .map(({ skill }) => skill)
-}
-
 function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillMomentSourceDigest[] {
   return [
     {
@@ -736,7 +686,17 @@ function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillM
   ]
 }
 
-function buildMockMomentBody(skill: SkillMomentSkillInput, digest: SkillMomentSourceDigest, index: number): string {
+function buildMockMomentBody(
+  skill: SkillMomentSkillInput,
+  digest: SkillMomentSourceDigest,
+  index: number,
+  roomId: string,
+  artifactKind?: WriterArtifactKind,
+): string {
+  if (roomId === WRITER_ROOM_ID && artifactKind) {
+    return buildWriterRoomMockMomentBody(skill, artifactKind)
+  }
+
   const skillSlug = normalizeSkillMomentSlug(skill)
   if (skillSlug === 'homelander') {
     return [
@@ -776,7 +736,17 @@ function buildMockMomentBody(skill: SkillMomentSkillInput, digest: SkillMomentSo
   ].join('\n')
 }
 
-function buildMockCritiqueBody(author: SkillMomentSkillInput, critic: SkillMomentSkillInput, index: number): string {
+function buildMockCritiqueBody(
+  author: SkillMomentSkillInput,
+  critic: SkillMomentSkillInput,
+  index: number,
+  roomId: string,
+  artifactKind?: WriterArtifactKind,
+): string {
+  if (roomId === WRITER_ROOM_ID) {
+    return buildWriterRoomCritiqueBody(critic, index, artifactKind)
+  }
+
   const authorSlug = normalizeSkillMomentSlug(author)
   const criticSlug = normalizeSkillMomentSlug(critic)
 
@@ -835,69 +805,13 @@ function buildMockCritiqueBody(author: SkillMomentSkillInput, critic: SkillMomen
   return clampGraphemes(questions[index % questions.length]!, 20)
 }
 
-function shouldKeepSkillMoment(author: SkillMomentSkillInput, body: string): boolean {
-  const text = body.trim()
-  const chars = Array.from(text).length
-  if (chars < 20) {
+function shouldAttachSkillMomentSource(author: SkillMomentSkillInput, roomId: string): boolean {
+  if (roomId === WRITER_ROOM_ID) {
     return false
   }
 
-  const authorSlug = normalizeSkillMomentSlug(author)
-  if (authorSlug === 'homelander') {
-    return text.includes('孩子们，我复活了。') && text.includes('需要')
-  }
-
-  return !text.includes('AgentOS 本地 mock') && !text.includes('这条是 AgentOS')
-}
-
-function shouldAttachSkillMomentSource(author: SkillMomentSkillInput): boolean {
   const authorSlug = normalizeSkillMomentSlug(author)
   return authorSlug !== 'homelander' && authorSlug !== 'butcher'
-}
-
-function shouldKeepSkillMomentCritique(
-  author: SkillMomentSkillInput,
-  critic: SkillMomentSkillInput,
-  body: string,
-): boolean {
-  const text = body.trim()
-  if (!text) {
-    return false
-  }
-
-  const oldGenericTemplates = new Set([
-    '证据只到摘要层。',
-    '缺少价格信号。',
-    '因果链未证明。',
-    '忽略执行成本。',
-    '样本太少。',
-    '反证入口不足。',
-  ])
-  if (oldGenericTemplates.has(text)) {
-    return false
-  }
-
-  const chars = Array.from(text).length
-  if (chars < 5 || chars > 20) {
-    return false
-  }
-
-  const authorSlug = normalizeSkillMomentSlug(author)
-  const criticSlug = normalizeSkillMomentSlug(critic)
-  if (authorSlug === 'homelander' && criticSlug === 'butcher') {
-    return true
-  }
-  if (criticSlug === 'homelander') {
-    return text.includes('掌声') || text.includes('神')
-  }
-
-  return (
-    text.includes('？')
-    || text.includes('?')
-    || text.includes('保留')
-    || text.includes('证据')
-    || text.includes('账')
-  )
 }
 
 function defaultSkillMomentParticipants(): SkillMomentSkillInput[] {
@@ -1045,35 +959,49 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
     const criticsPath = join(momentsDir, 'critics.jsonl')
     const runsPath = join(momentsDir, 'runs.jsonl')
     const sourceDigests = mockSkillMomentSourceDigests(runId, createdAt)
-    const eligibleSkills = orderSkillMomentParticipants(
+    const roomPolicy = getSkillCrewRoomPolicy(roomId)
+    const isWriterRoom = roomId === WRITER_ROOM_ID
+    let eligibleSkills = roomPolicy.orderParticipants(
       (await resolveSkillMomentParticipants(args, workspace.rootPath, roomId))
-        .filter(shouldAutoIncludeSkillMomentParticipant),
-      roomId,
+        .filter((skill) => roomPolicy.shouldAutoInclude(skill)),
     )
-    const maxMoments = Math.min(Math.max(args.maxMoments ?? 3, 1), 6)
+    if (isWriterRoom && eligibleSkills.length === 0) {
+      eligibleSkills = roomPolicy.orderParticipants(defaultSkillMomentParticipants())
+    }
+    const maxMoments = isWriterRoom
+      ? Math.min(Math.max(args.maxMoments ?? WRITER_ROOM_MOCK_PHASES.length, 1), WRITER_ROOM_MOCK_PHASES.length)
+      : Math.min(Math.max(args.maxMoments ?? 3, 1), 6)
     const maxCriticsPerMoment = Math.min(Math.max(args.maxCriticsPerMoment ?? 3, 0), 3)
-    const authors = eligibleSkills.slice(0, maxMoments)
+    // Future real Writer Room generation must route through the existing Codex OAuth / ChatGPT Plus connection.
+    const momentPlans: Array<{ author: SkillMomentSkillInput; artifactKind?: WriterArtifactKind }> = isWriterRoom
+      ? buildWriterRoomMomentPlans(eligibleSkills, defaultSkillMomentParticipants(), maxMoments)
+      : eligibleSkills.slice(0, maxMoments).map((author) => ({ author }))
+    const writerRoomPhase: WriterRoomPhase | undefined = isWriterRoom
+      ? momentPlans[momentPlans.length - 1]?.artifactKind ?? 'continuity_report'
+      : undefined
     const moments: SkillMoment[] = []
 
     for (const digest of sourceDigests) {
       await appendJsonlRecord(sourceDigestsPath, digest)
     }
 
-    for (const [index, author] of authors.entries()) {
+    for (const [index, plan] of momentPlans.entries()) {
+      const { author, artifactKind } = plan
       const digest = sourceDigests[index % sourceDigests.length]!
       const momentId = `${runId}-moment-${index + 1}`
-      const body = buildMockMomentBody(author, digest, index)
-      if (!shouldKeepSkillMoment(author, body)) {
+      const body = buildMockMomentBody(author, digest, index, roomId, artifactKind)
+      if (!roomPolicy.shouldKeepMoment(author, body)) {
         continue
       }
-      const critics = orderSkillMomentCritics(
+      const critics = roomPolicy.orderCritics(
         author,
         eligibleSkills.filter((skill) => skill.id !== author.id),
+        { artifactKind },
       )
         .slice(0, maxCriticsPerMoment)
         .flatMap((critic, criticIndex): SkillMomentCritique[] => {
-          const critiqueBody = buildMockCritiqueBody(author, critic, index + criticIndex)
-          if (!shouldKeepSkillMomentCritique(author, critic, critiqueBody)) {
+          const critiqueBody = buildMockCritiqueBody(author, critic, index + criticIndex, roomId, artifactKind)
+          if (!roomPolicy.shouldKeepCritique(author, critic, critiqueBody)) {
             return []
           }
 
@@ -1085,10 +1013,12 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
             criticHandle: critic.handle,
             body: critiqueBody,
             createdAt,
-            artifacts: ['agentos_mock_critic', 'critic_limit_20_chars'],
+            artifacts: artifactKind
+              ? ['writer_room_mock_critic', writerArtifactTag(artifactKind), 'critic_limit_20_chars']
+              : ['agentos_mock_critic', 'critic_limit_20_chars'],
           }]
         })
-      const sources = shouldAttachSkillMomentSource(author) ? [digest] : []
+      const sources = shouldAttachSkillMomentSource(author, roomId) ? [digest] : []
       const moment: SkillMoment = {
         id: momentId,
         roomId,
@@ -1100,10 +1030,12 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
         createdAt,
         sources,
         critiques: critics,
-        artifacts: [
-          'agentos_mock_moment',
-          sources.length > 0 ? 'source_digest_mock' : 'persona_scene_moment',
-        ],
+        artifacts: artifactKind
+          ? ['writer_room_mock_moment', writerArtifactTag(artifactKind)]
+          : [
+            'agentos_mock_moment',
+            sources.length > 0 ? 'source_digest_mock' : 'persona_scene_moment',
+          ],
       }
 
       const storedMoment: StoredSkillMoment = {
@@ -1134,6 +1066,10 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
       endedAt: new Date().toISOString(),
       mode: 'manual_mock',
       sourceDigestCount: sourceDigests.length,
+      ...(writerRoomPhase ? {
+        phase: writerRoomPhase,
+        artifactCount: moments.length,
+      } : {}),
       momentCount: moments.length,
       criticCount: moments.reduce((count, moment) => count + moment.critiques.length, 0),
       status: 'success',

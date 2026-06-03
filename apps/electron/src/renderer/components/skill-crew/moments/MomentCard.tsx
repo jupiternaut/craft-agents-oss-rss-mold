@@ -16,6 +16,10 @@ import {
   feedbackTargetKey,
   skillMomentFeedbackOptions,
 } from './types'
+import {
+  formatArtifactBadge,
+  isWriterArtifactTag,
+} from './artifact-badges'
 
 type MomentCardProps = {
   workspaceId?: string
@@ -87,8 +91,14 @@ export function MomentCard({
         {moment.artifacts && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {moment.artifacts.map((artifact) => (
-              <span key={artifact} className="rounded-[5px] bg-foreground/[0.06] px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                {artifact}
+              <span
+                key={artifact}
+                className={cn(
+                  'rounded-[5px] bg-foreground/[0.06] px-1.5 py-0.5 text-[11px] text-muted-foreground',
+                  isWriterArtifactTag(artifact) && 'border border-foreground/15 bg-background text-foreground',
+                )}
+              >
+                {formatArtifactBadge(artifact)}
               </span>
             ))}
           </div>

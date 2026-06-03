@@ -50,6 +50,7 @@
     "./views": "./src/views/index.ts",
     "./views/storage": "./src/views/storage.ts",
     "./validation": "./src/validation/index.ts",
+    "./writer-room": "./src/writer-room/index.ts",
     "./version": "./src/version/index.ts",
     "./branding": "./src/branding.ts",
     "./feature-flags": "./src/feature-flags.ts",

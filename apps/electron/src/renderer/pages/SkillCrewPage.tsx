@@ -162,6 +162,7 @@ const channelLabels = {
   design: 'design',
   build: 'build',
   policy: 'policy',
+  screenplay: 'Writer Room',
 }
 
 function formatChannelLabel(channelId: string): string {
@@ -829,7 +830,7 @@ export default function SkillCrewPage() {
       const result = await window.electronAPI.runSkillMomentCycle({
         workspaceId: activeWorkspaceId,
         roomId: activeChannel,
-        maxMoments: 3,
+        maxMoments: activeChannel === 'screenplay' ? 6 : 3,
         maxCriticsPerMoment: 3,
         skills: cycleRoles.map((role) => ({
           id: role.id,

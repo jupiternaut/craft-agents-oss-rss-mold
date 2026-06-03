@@ -70,6 +70,7 @@ const ROOM_DESCRIPTIONS: Record<string, string> = {
   design: '产品、界面和角色设定',
   build: '实现路径、验证和交付',
   policy: '申报、规则和外部约束',
+  screenplay: '剧本工件和连续性审阅',
 }
 
 const ROOM_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -77,6 +78,7 @@ const ROOM_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   design: Sparkles,
   build: Folder,
   policy: FileText,
+  screenplay: FileText,
 }
 
 const SOURCE_LABELS: Record<LoadedSkill['source'], string> = {
@@ -148,7 +150,7 @@ export function SkillCrewNavigatorPanel() {
   const activeWorkspace = useActiveWorkspace()
   const { activeWorkspaceId, activeSessionWorkingDirectory } = useAppShellContext()
   const [activeChannel, setActiveChannel] = useAtom(skillCrewChannelAtom)
-  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set(['debate', 'design', 'build', 'policy']))
+  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set(DEFAULT_SKILL_CREW_ROOMS))
   const [customFolders, setCustomFolders] = React.useState<CrewFolder[]>([])
   const [skillPlacement, setSkillPlacement] = useAtom(skillCrewPlacementAtom)
   const [draggingSkillSlug, setDraggingSkillSlug] = React.useState<string | null>(null)
