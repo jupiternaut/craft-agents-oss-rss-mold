@@ -1,10 +1,11 @@
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import {
   Bot,
   Check,
   Copy,
   Crown,
+  FileDown,
   GitBranch,
   MessageSquareQuote,
   Radio,
@@ -19,8 +20,11 @@ import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { SkillAvatar } from '@/components/ui/skill-avatar'
+import { SkillMomentsView, type SkillMomentFeedbackTarget } from '@/components/skill-crew/moments/SkillMomentsView'
+import { feedbackTargetKey } from '@/components/skill-crew/moments/types'
+import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
-import type { LoadedSkill } from '../../shared/types'
+import type { LoadedSkill, SkillFeedbackVerdict, SkillMoment } from '../../shared/types'
 import {
   DEFAULT_SKILL_CREW_ROOMS,
   GLOBAL_SKILL_CREW_ROOM,
@@ -45,10 +49,18 @@ type CrewMessage = {
   role: 'user' | 'agent' | 'chairman' | 'system'
   author: string
   handle?: string
+  skillId?: string
   body: string
   timestamp: string
   quoteId?: string
   artifacts?: string[]
+  feedbackVerdict?: SkillFeedbackVerdict
+  feedbackSavedPath?: string
+  runStartedAt?: number
+  runEndedAt?: number
+  elapsedMs?: number
+  contextChars?: number
+  contextTokensEstimate?: number
 }
 
 type CrewBranch = {
@@ -58,10 +70,77 @@ type CrewBranch = {
   messages: CrewMessage[]
 }
 
+type StoredCrewConversation = {
+  schemaVersion: 1
+  activeBranchId?: string
+  branches: CrewBranch[]
+}
+
 type ComposerFrame = {
   left: number
   width: number
   bottom: number
+}
+
+const SKILL_CREW_CONVERSATION_STORAGE_PREFIX = 'debt.skillCrew.conversation.v1'
+
+const skillFeedbackOptions: Array<{
+  verdict: SkillFeedbackVerdict
+  label: string
+  artifact: string
+}> = [
+  { verdict: 1, label: '1 进化', artifact: 'feedback_evolve' },
+  { verdict: 2, label: '2 不变', artifact: 'feedback_unchanged' },
+  { verdict: 3, label: '3 退化', artifact: 'feedback_regress' },
+]
+
+function skillFeedbackLabel(verdict?: SkillFeedbackVerdict) {
+  return skillFeedbackOptions.find((option) => option.verdict === verdict)?.label
+}
+
+function estimateTokens(text: string) {
+  return Math.max(1, Math.ceil(text.length / 3))
+}
+
+function formatCompactNumber(value: number) {
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`
+  }
+
+  return String(value)
+}
+
+function formatDuration(ms: number) {
+  const seconds = Math.max(0, Math.round(ms / 100) / 10)
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
+  }
+
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  return `${minutes}m ${rest}s`
+}
+
+function buildRunMetaParts(message: CrewMessage, now: number) {
+  const parts: string[] = []
+
+  if (message.contextTokensEstimate || message.contextChars) {
+    const tokenPart = message.contextTokensEstimate
+      ? `context ~${formatCompactNumber(message.contextTokensEstimate)} tok`
+      : 'context unknown'
+    const charsPart = message.contextChars
+      ? `${formatCompactNumber(message.contextChars)} chars`
+      : ''
+    parts.push([tokenPart, charsPart].filter(Boolean).join(' / '))
+  }
+
+  if (message.runStartedAt) {
+    const elapsed = message.elapsedMs ?? Math.max(0, now - message.runStartedAt)
+    const label = message.runEndedAt ? '用时' : '回复中'
+    parts.push(`${label} ${formatDuration(elapsed)}`)
+  }
+
+  return parts
 }
 
 const channelLabels = {
@@ -76,7 +155,8 @@ function formatChannelLabel(channelId: string): string {
 }
 
 function buildRoles(skills: LoadedSkill[]): CrewRole[] {
-  const loaded = skills.map((skill): CrewRole => ({
+  const chairmanSkill = skills.find((skill) => skill.slug === 'chairman')
+  const loaded = skills.filter((skill) => skill.slug !== 'chairman').map((skill): CrewRole => ({
     id: skill.slug,
     name: skill.metadata.name || skill.slug,
     handle: `@${skill.slug}`,
@@ -94,6 +174,7 @@ function buildRoles(skills: LoadedSkill[]): CrewRole[] {
       description: '召集 skill、安排轮次、压缩分歧并给出下一步。',
       chairman: true,
       global: true,
+      skill: chairmanSkill,
     },
     ...(hasSkillCreator ? [] : [{
       id: 'skillcreator',
@@ -121,16 +202,6 @@ function cleanSelectedPrompt(text: string, targets: CrewRole[]) {
   return cleaned.replace(/\s+/g, ' ').trim()
 }
 
-function makeAgentReply(role: CrewRole, prompt: string, quote?: CrewMessage): string {
-  const quoteLine = quote ? `我先接住引用里的上下文：“${quote.body.slice(0, 80)}”。` : ''
-  return [
-    quoteLine,
-    `我的角色边界是：${role.description}`,
-    `针对“${prompt || '这个议题'}”，我会先给出本角色视角，而不是替整个团队做结论。`,
-    '下一步需要把这个观点转成可引用 artifact，再交给董事长压缩分歧。',
-  ].filter(Boolean).join('\n')
-}
-
 function makeModelSelfReply(prompt: string, quote?: CrewMessage): string {
   const quoteLine = quote ? `我先接住引用里的上下文：“${quote.body.slice(0, 80)}”。` : ''
   return [
@@ -140,6 +211,51 @@ function makeModelSelfReply(prompt: string, quote?: CrewMessage): string {
   ].filter(Boolean).join('\n')
 }
 
+function makeSkillFallbackReply(role: CrewRole, prompt: string, errorText: string): string {
+  const errorSummary = errorText.length > 180 ? `${errorText.slice(0, 180)}...` : errorText
+  const preface = [
+    `模型连接暂不可用：${errorSummary}`,
+    '以下是本地降级发言：根据该 skill 的角色契约生成，未执行 GitHub 搜索，不等同于真实模型返回。',
+  ].join('\n')
+
+  if (role.id === 'sun-yuchen') {
+    return [
+      preface,
+      '',
+      '孙宇晨视角:',
+      '- 主张: OPC 公司先别把自己做成咨询公司，要做成一个能被公开看见、能迅速传播、能接入生态的 AI 原生产品。',
+      '- 最该做的 OPC: 面向 AI 超级个体的研发与决策工作台，把 skill、GitHub 资产、飞书协作和政策申报材料生成串成一条可演示链路。',
+      '- GitHub/技术资产怎么包装: GitHub fact 未搜索；市场包装上，应把已存在 repo 作为“持续交付能力”的证据，把 skill crew 作为产品界面，把政策材料作为第一个付费/申报场景。',
+      '- 7 天动作: 做一个可录屏 demo，选 3 个高质量 GitHub 项目做案例页，发布“一个人带 10 个 AI 角色做公司”的故事，再找园区/创业者试用。',
+      '- 最大风险: 只有叙事没有可复用产品；以及上游开源、第三方模型、飞书接口的 IP 和依赖边界没讲清。',
+      '- 我反驳哈耶克: 市场发现当然重要，但你不能等市场给你答案；先用强叙事把第一批人拉进来，反馈才会出现。',
+    ].join('\n')
+  }
+
+  if (role.id === 'hayek') {
+    return [
+      preface,
+      '',
+      '哈耶克视角:',
+      '- 主张: OPC 公司不应先设计一个宏大的中心计划，而应把自己变成快速发现需求的制度化实验机器。',
+      '- 最该做的 OPC: 选择一个创始人真正拥有局部知识的细分场景，例如 AI 研发编排、申报材料生成、或小团队 agent 协作，而不是泛泛宣称“AI 一人公司平台”。',
+      '- GitHub/技术资产怎么验证: GitHub fact 未搜索；验证方式应是检查 README、可运行 demo、最近提交、真实用户问题和可复用工作流，而不是只看项目数量。',
+      '- 市场发现实验: 先找 5 个真实 OPC/独立开发者，让他们用同一套 skill crew 完成一个具体任务，记录节省时间、失败点、愿付价格和复用频次。',
+      '- 最大风险: 政策补贴扭曲判断，让公司为申报材料而不是用户价值优化；另一个风险是把不同开源能力误包装成原创资产。',
+      '- 我反驳孙宇晨: 叙事可以降低搜索成本，但如果没有可观察的市场信号，强叙事会把错误方向放大得更快。',
+    ].join('\n')
+  }
+
+  return [
+    preface,
+    '',
+    `${role.name} 视角:`,
+    `- 收到的问题: ${prompt || '继续当前讨论。'}`,
+    `- 角色边界: ${role.description}`,
+    '- 下一步: 请恢复可用模型连接后重新发送；届时该 skill 会读取 SKILL.md 并生成真实回复。',
+  ].join('\n')
+}
+
 function seedMessages(): CrewMessage[] {
   return [
     {
@@ -147,6 +263,7 @@ function seedMessages(): CrewMessage[] {
       role: 'chairman',
       author: '董事长',
       handle: '@董事长',
+      skillId: 'chairman',
       body: '这里是 Skill Crew 工作区。你可以直接 @skill 提问，也可以 @董事长 召集多个 skill 讨论、辩论、归纳。',
       timestamp: formatTime(),
       artifacts: ['channel_bootstrap', 'chairman_protocol'],
@@ -156,6 +273,7 @@ function seedMessages(): CrewMessage[] {
       role: 'agent',
       author: 'skillcreator',
       handle: '@skillcreator',
+      skillId: 'skillcreator',
       body: '我负责把自然语言里的“人”提炼成可复用 skill：角色边界、醒来条件、发言方式、交接工件。',
       timestamp: formatTime(),
       artifacts: ['persona_contract'],
@@ -163,16 +281,166 @@ function seedMessages(): CrewMessage[] {
   ]
 }
 
+function defaultBranches(): CrewBranch[] {
+  return [{ id: 'main', title: 'main', messages: seedMessages() }]
+}
+
+function conversationStorageKey(workspaceId: string | null | undefined, channelId: string): string {
+  return [
+    SKILL_CREW_CONVERSATION_STORAGE_PREFIX,
+    workspaceId || 'no-workspace',
+    encodeURIComponent(channelId),
+  ].join(':')
+}
+
+function isStoredCrewMessage(value: unknown): value is CrewMessage {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<CrewMessage>
+  return typeof candidate.id === 'string'
+    && typeof candidate.role === 'string'
+    && typeof candidate.author === 'string'
+    && typeof candidate.body === 'string'
+    && typeof candidate.timestamp === 'string'
+}
+
+function normalizeStoredBranches(value: unknown): CrewBranch[] | null {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  const branches = value
+    .map((branch): CrewBranch | null => {
+      if (!branch || typeof branch !== 'object') {
+        return null
+      }
+
+      const candidate = branch as Partial<CrewBranch>
+      if (typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || !Array.isArray(candidate.messages)) {
+        return null
+      }
+
+      const messages = candidate.messages.filter(isStoredCrewMessage)
+      return {
+        id: candidate.id,
+        title: candidate.title,
+        sourceMessageId: typeof candidate.sourceMessageId === 'string' ? candidate.sourceMessageId : undefined,
+        messages,
+      }
+    })
+    .filter((branch): branch is CrewBranch => Boolean(branch))
+
+  return branches.length > 0 ? branches : null
+}
+
+function loadStoredConversation(key: string): StoredCrewConversation {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) {
+      return { schemaVersion: 1, activeBranchId: 'main', branches: defaultBranches() }
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StoredCrewConversation>
+    const branches = normalizeStoredBranches(parsed.branches)
+    if (!branches) {
+      return { schemaVersion: 1, activeBranchId: 'main', branches: defaultBranches() }
+    }
+
+    const activeBranchId = parsed.activeBranchId && branches.some((branch) => branch.id === parsed.activeBranchId)
+      ? parsed.activeBranchId
+      : branches[0]?.id ?? 'main'
+
+    return { schemaVersion: 1, activeBranchId, branches }
+  } catch {
+    return { schemaVersion: 1, activeBranchId: 'main', branches: defaultBranches() }
+  }
+}
+
+function saveStoredConversation(key: string, conversation: StoredCrewConversation): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(conversation))
+  } catch (error) {
+    console.warn('[SkillCrew] Failed to persist conversation', error)
+  }
+}
+
 function buildMessageClipboardText(message: CrewMessage) {
+  const runMeta = buildRunMetaParts(message, Date.now())
   return [
     `${message.author}${message.handle ? ` ${message.handle}` : ''} ${message.timestamp}`,
     message.body,
+    runMeta.length ? `Run: ${runMeta.join(' | ')}` : '',
+    message.feedbackVerdict ? `Feedback: ${skillFeedbackLabel(message.feedbackVerdict)}` : '',
+    message.feedbackSavedPath ? `Feedback sample: ${message.feedbackSavedPath}` : '',
     message.artifacts?.length ? `Artifacts: ${message.artifacts.join(', ')}` : '',
   ].filter(Boolean).join('\n')
 }
 
 function buildBranchClipboardText(branch: CrewBranch) {
   return branch.messages.map(buildMessageClipboardText).join('\n\n---\n\n')
+}
+
+function buildMessageMarkdown(message: CrewMessage, messageById: Map<string, CrewMessage>) {
+  const quotedMessage = message.quoteId ? messageById.get(message.quoteId) : undefined
+  const runMeta = buildRunMetaParts(message, Date.now())
+  return [
+    `### ${message.author}${message.handle ? ` ${message.handle}` : ''} · ${message.timestamp}`,
+    quotedMessage ? `> 引用 ${quotedMessage.author}: ${quotedMessage.body.replace(/\n/g, '\n> ')}` : '',
+    message.body,
+    runMeta.length ? `\nRun: ${runMeta.join(' | ')}` : '',
+    message.feedbackVerdict ? `\nFeedback: ${skillFeedbackLabel(message.feedbackVerdict)}` : '',
+    message.feedbackSavedPath ? `Feedback sample: \`${message.feedbackSavedPath}\`` : '',
+    message.artifacts?.length ? `\nArtifacts: ${message.artifacts.map((artifact) => `\`${artifact}\``).join(', ')}` : '',
+  ].filter(Boolean).join('\n\n')
+}
+
+function buildConversationMarkdown(branches: CrewBranch[], activeChannel: string) {
+  const now = new Date().toISOString()
+  return [
+    `# Skill Crew #${formatChannelLabel(activeChannel)} Conversation`,
+    '',
+    `Exported: ${now}`,
+    `Branches: ${branches.length}`,
+    '',
+    ...branches.flatMap((branch, index) => {
+      const messageById = new Map(branch.messages.map((message) => [message.id, message]))
+      return [
+        `## Branch ${index + 1}: ${branch.title}`,
+        branch.sourceMessageId ? `Source message: \`${branch.sourceMessageId}\`` : '',
+        '',
+        ...branch.messages.map((message) => buildMessageMarkdown(message, messageById)),
+        '',
+      ].filter(Boolean)
+    }),
+  ].join('\n')
+}
+
+function downloadMarkdown(filename: string, markdown: string) {
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function inferSkillWorkspaceRoot(skillDirectoryPath?: string) {
+  if (!skillDirectoryPath) {
+    return undefined
+  }
+
+  const marker = '/skills/'
+  const markerIndex = skillDirectoryPath.indexOf(marker)
+  if (markerIndex === -1) {
+    return undefined
+  }
+
+  return skillDirectoryPath.slice(0, markerIndex)
 }
 
 function roleBelongsToChannel(role: CrewRole, activeChannel: string, placement: Record<string, string>) {
@@ -208,8 +476,112 @@ function parseMentionState(value: string, cursor: number) {
   return { start, query }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const mentionBoundary = String.raw`[\s,.;:!?，。！？、；：]`
+
+function findMentionedRoleIds(text: string, roles: CrewRole[]) {
+  const matchedIds: string[] = []
+
+  for (const role of roles) {
+    const matcher = new RegExp(`(^|${mentionBoundary})${escapeRegExp(role.handle)}(?=$|${mentionBoundary})`, 'u')
+    if (matcher.test(text)) {
+      matchedIds.push(role.id)
+    }
+  }
+
+  return matchedIds
+}
+
+function removeMentionHandle(text: string, handle: string) {
+  const matcher = new RegExp(`(^|${mentionBoundary})${escapeRegExp(handle)}(?=$|${mentionBoundary})`, 'gu')
+  return text
+    .replace(matcher, (match, prefix: string) => (prefix ? prefix : match.startsWith(handle) ? '' : match))
+    .replace(/[ \t]{2,}/g, ' ')
+    .trimStart()
+}
+
+function buildSkillInvocationPrompt({
+  role,
+  prompt,
+  quote,
+  activeChannel,
+  selectedRoles,
+  skillContent,
+  skillDirectoryPath,
+}: {
+  role: CrewRole
+  prompt: string
+  quote?: CrewMessage
+  activeChannel: string
+  selectedRoles: CrewRole[]
+  skillContent: string
+  skillDirectoryPath?: string
+}) {
+  const quotedContext = quote
+    ? `\n引用上下文:\n<quote author="${quote.author}" handle="${quote.handle ?? ''}">\n${quote.body}\n</quote>`
+    : ''
+  const selectedHandles = selectedRoles.map((selected) => selected.handle).join(', ') || role.handle
+
+  return [
+    `你正在 Skill Crew 的 #${formatChannelLabel(activeChannel)} 文件夹中发言。`,
+    `你被用户通过下拉菜单明确选中为 ${role.handle}。`,
+    `同轮选中的 skill: ${selectedHandles}`,
+    skillDirectoryPath ? `完整 skill 目录路径: ${skillDirectoryPath}` : '',
+    '',
+    '下面是你的 SKILL.md 入口指令。请严格按这个角色、边界、触发条件和输出契约工作。',
+    '<SKILL_MD>',
+    skillContent.trim(),
+    '</SKILL_MD>',
+    quotedContext,
+    '',
+    '用户请求:',
+    prompt || '请根据当前上下文继续。',
+    '',
+    '执行要求:',
+    '- 直接完成请求，不要只复述你的角色边界。',
+    '- 如果 SKILL.md 引用 references/、agents/、evals/ 或 scripts/，请按完整 skill 目录路径读取相对文件。',
+    '- 如果需要搜索、读文件或写文件，但当前权限/上下文不足，请明确说明缺什么。',
+    '- 如果执行文件写入，默认只改当前工作区 skills 目录或用户明确指定的路径。',
+    '- 输出给 Skill Crew 聊天窗口，保持自然语言可读。',
+    '- 如果你需要把任务交给其他 skill，请产出明确的 task packet。',
+  ].filter(Boolean).join('\n')
+}
+
+function buildModelSelfInvocationPrompt({
+  prompt,
+  quote,
+  activeChannel,
+}: {
+  prompt: string
+  quote?: CrewMessage
+  activeChannel: string
+}) {
+  const quotedContext = quote
+    ? `\n引用上下文:\n<quote author="${quote.author}" handle="${quote.handle ?? ''}">\n${quote.body}\n</quote>`
+    : ''
+
+  return [
+    `你正在 Skill Crew 的 #${formatChannelLabel(activeChannel)} 文件夹中发言。`,
+    '本轮用户没有通过有效 @handle 选择 skill，所以你以模型自身身份直接回答。',
+    quotedContext,
+    '',
+    '用户请求:',
+    prompt || '请根据当前上下文继续。',
+    '',
+    '执行要求:',
+    '- 直接回答用户问题，不要声称自己是某个 skill。',
+    '- 如果需要引用上下文，先利用引用信息，再给出判断。',
+    '- 保持自然语言可读，匹配用户语言。',
+  ].filter(Boolean).join('\n')
+}
+
 export default function SkillCrewPage() {
+  const { activeWorkspaceId, activeSessionWorkingDirectory } = useAppShellContext()
   const skills = useAtomValue(skillsAtom)
+  const setSkills = useSetAtom(skillsAtom)
   const activeChannel = useAtomValue(skillCrewChannelAtom)
   const skillPlacement = useAtomValue(skillCrewPlacementAtom)
   const roles = React.useMemo(() => buildRoles(skills), [skills])
@@ -217,9 +589,12 @@ export default function SkillCrewPage() {
     () => roles.filter((role) => roleBelongsToChannel(role, activeChannel, skillPlacement)),
     [activeChannel, roles, skillPlacement],
   )
-  const [branches, setBranches] = React.useState<CrewBranch[]>(() => [
-    { id: 'main', title: 'main', messages: seedMessages() },
-  ])
+  const storageKey = React.useMemo(
+    () => conversationStorageKey(activeWorkspaceId, activeChannel),
+    [activeChannel, activeWorkspaceId],
+  )
+  const [hydratedStorageKey, setHydratedStorageKey] = React.useState<string | null>(null)
+  const [branches, setBranches] = React.useState<CrewBranch[]>(() => defaultBranches())
   const [activeBranchId, setActiveBranchId] = React.useState('main')
   const [draft, setDraft] = React.useState('')
   const [quoteId, setQuoteId] = React.useState<string | undefined>()
@@ -227,6 +602,14 @@ export default function SkillCrewPage() {
   const [selectedTargetIds, setSelectedTargetIds] = React.useState<string[]>([])
   const [mentionState, setMentionState] = React.useState<{ start: number; query: string } | null>(null)
   const [mentionIndex, setMentionIndex] = React.useState(0)
+  const [feedbackPendingId, setFeedbackPendingId] = React.useState<string | undefined>()
+  const [runClockNow, setRunClockNow] = React.useState(() => Date.now())
+  const [activeCrewSurface, setActiveCrewSurface] = React.useState<'chat' | 'moments' | 'agentos'>('chat')
+  const [skillMoments, setSkillMoments] = React.useState<SkillMoment[]>([])
+  const [skillMomentsLoading, setSkillMomentsLoading] = React.useState(false)
+  const [skillMomentsRunning, setSkillMomentsRunning] = React.useState(false)
+  const [skillMomentsLastRunPath, setSkillMomentsLastRunPath] = React.useState<string | undefined>()
+  const [skillMomentFeedbackPendingKey, setSkillMomentFeedbackPendingKey] = React.useState<string | undefined>()
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0]
   const messages = activeBranch?.messages ?? []
   const quote = messages.find((message) => message.id === quoteId)
@@ -261,17 +644,57 @@ export default function SkillCrewPage() {
   }, [mentionState, mentionableRoles])
 
   React.useEffect(() => {
+    setHydratedStorageKey(null)
+    const stored = loadStoredConversation(storageKey)
+    setBranches(stored.branches)
+    setActiveBranchId(stored.activeBranchId ?? stored.branches[0]?.id ?? 'main')
+    setDraft('')
+    setQuoteId(undefined)
+    setSelectedTargetIds([])
+    setMentionState(null)
+    setHydratedStorageKey(storageKey)
+  }, [storageKey])
+
+  React.useEffect(() => {
+    if (hydratedStorageKey !== storageKey) {
+      return
+    }
+
+    saveStoredConversation(storageKey, {
+      schemaVersion: 1,
+      activeBranchId,
+      branches,
+    })
+  }, [activeBranchId, branches, hydratedStorageKey, storageKey])
+
+  React.useEffect(() => {
     scrollRef.current?.scrollIntoView({ block: 'end' })
   }, [activeBranchId, messages.length])
+
+  React.useEffect(() => {
+    const hasPendingRun = messages.some((message) => message.runStartedAt && !message.runEndedAt)
+    if (!hasPendingRun) {
+      return
+    }
+
+    const timer = window.setInterval(() => setRunClockNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [messages])
 
   React.useEffect(() => {
     setMentionIndex(0)
   }, [mentionState?.query, activeChannel])
 
   React.useEffect(() => {
-    const availableIds = new Set(mentionableRoles.map((role) => role.id))
-    setSelectedTargetIds((current) => current.filter((id) => availableIds.has(id)))
-  }, [mentionableRoles])
+    const mentionedIds = findMentionedRoleIds(draft, mentionableRoles)
+    setSelectedTargetIds((current) => {
+      if (current.length === mentionedIds.length && current.every((id, index) => id === mentionedIds[index])) {
+        return current
+      }
+
+      return mentionedIds
+    })
+  }, [draft, mentionableRoles])
 
   React.useLayoutEffect(() => {
     const updateFrame = () => {
@@ -304,6 +727,394 @@ export default function SkillCrewPage() {
         : branch
     )))
   }, [activeBranchId])
+
+  const updateMessageInBranch = React.useCallback((
+    branchId: string,
+    messageId: string,
+    updater: (message: CrewMessage) => CrewMessage,
+  ) => {
+    setBranches((prev) => prev.map((branch) => (
+      branch.id === branchId
+        ? {
+          ...branch,
+          messages: branch.messages.map((message) => (
+            message.id === messageId ? updater(message) : message
+          )),
+        }
+        : branch
+    )))
+  }, [])
+
+  const refreshSkills = React.useCallback(async () => {
+    if (!activeWorkspaceId) {
+      return
+    }
+
+    try {
+      const loaded = await window.electronAPI.refreshSkillCrewSkills(activeWorkspaceId, activeSessionWorkingDirectory)
+      setSkills(loaded || [])
+    } catch (error) {
+      console.warn('[SkillCrew] Failed to refresh skills after skill run', error)
+    }
+  }, [activeSessionWorkingDirectory, activeWorkspaceId, setSkills])
+
+  const loadSkillMoments = React.useCallback(async () => {
+    if (!activeWorkspaceId) {
+      setSkillMoments([])
+      return
+    }
+
+    setSkillMomentsLoading(true)
+    try {
+      const result = await window.electronAPI.listSkillMoments({
+        workspaceId: activeWorkspaceId,
+        roomId: activeChannel,
+        limit: 80,
+      })
+      setSkillMoments(result.moments)
+    } catch (error) {
+      console.warn('[SkillCrew] Failed to load Skill Moments', error)
+    } finally {
+      setSkillMomentsLoading(false)
+    }
+  }, [activeChannel, activeWorkspaceId])
+
+  React.useEffect(() => {
+    if (activeCrewSurface === 'chat') {
+      return
+    }
+
+    void loadSkillMoments()
+  }, [activeCrewSurface, loadSkillMoments])
+
+  const runSkillMomentCycle = React.useCallback(async () => {
+    if (!activeWorkspaceId || skillMomentsRunning) {
+      return
+    }
+
+    const cycleRoles = mentionableRoles
+      .filter((role) => !role.chairman)
+      .slice(0, 8)
+
+    setSkillMomentsRunning(true)
+    try {
+      const result = await window.electronAPI.runSkillMomentCycle({
+        workspaceId: activeWorkspaceId,
+        roomId: activeChannel,
+        maxMoments: 3,
+        maxCriticsPerMoment: 3,
+        skills: cycleRoles.map((role) => ({
+          id: role.id,
+          name: role.name,
+          handle: role.handle,
+          description: role.description,
+        })),
+      })
+      setSkillMomentsLastRunPath(result.path)
+      setSkillMoments((current) => {
+        const freshIds = new Set(result.moments.map((moment) => moment.id))
+        return [
+          ...result.moments,
+          ...current.filter((moment) => !freshIds.has(moment.id)),
+        ].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      })
+    } catch (error) {
+      console.warn('[SkillCrew] Failed to run Skill Moments cycle', error)
+    } finally {
+      setSkillMomentsRunning(false)
+    }
+  }, [activeChannel, activeWorkspaceId, mentionableRoles, skillMomentsRunning])
+
+  const updateSkillMomentFeedback = React.useCallback((
+    target: SkillMomentFeedbackTarget,
+    verdict: SkillFeedbackVerdict,
+    savedPath: string,
+  ) => {
+    setSkillMoments((current) => current.map((moment) => {
+      if (target.kind === 'moment' && moment.id === target.moment.id) {
+        return {
+          ...moment,
+          feedbackVerdict: verdict,
+          feedbackSavedPath: savedPath,
+        }
+      }
+
+      if (target.kind === 'critique' && moment.id === target.moment.id) {
+        return {
+          ...moment,
+          critiques: moment.critiques.map((critique) => (
+            critique.id === target.critique.id
+              ? {
+                ...critique,
+                feedbackVerdict: verdict,
+                feedbackSavedPath: savedPath,
+              }
+              : critique
+          )),
+        }
+      }
+
+      return moment
+    }))
+  }, [])
+
+  const recordSkillMomentFeedback = React.useCallback(async (
+    target: SkillMomentFeedbackTarget,
+    verdict: SkillFeedbackVerdict,
+  ) => {
+    if (!activeWorkspaceId) {
+      return
+    }
+
+    const targetKey = feedbackTargetKey(target)
+    const skillId = target.kind === 'critique' ? target.critique.criticSkillId : target.moment.skillId
+    const skillName = target.kind === 'critique' ? target.critique.criticSkillName : target.moment.skillName
+    const handle = target.kind === 'critique' ? target.critique.criticHandle : target.moment.handle
+    const messageBody = target.kind === 'critique' ? target.critique.body : target.moment.body
+
+    setSkillMomentFeedbackPendingKey(targetKey)
+    try {
+      const result = await window.electronAPI.recordSkillMomentFeedback({
+        workspaceId: activeWorkspaceId,
+        roomId: activeChannel,
+        momentId: target.moment.id,
+        critiqueId: target.kind === 'critique' ? target.critique.id : undefined,
+        skillId,
+        skillName,
+        handle,
+        verdict,
+        messageBody,
+        prompt: target.kind === 'critique' ? 'AgentOS critic feedback' : 'AgentOS moment feedback',
+        sources: target.moment.sources,
+        recordedAt: new Date().toISOString(),
+      })
+      updateSkillMomentFeedback(target, verdict, result.path)
+    } catch (error) {
+      console.warn('[SkillCrew] Failed to record Skill Moment feedback', error)
+    } finally {
+      setSkillMomentFeedbackPendingKey((current) => current === targetKey ? undefined : current)
+    }
+  }, [activeChannel, activeWorkspaceId, updateSkillMomentFeedback])
+
+  const resolveSkillContent = React.useCallback(async (role: CrewRole): Promise<{ content: string; path?: string }> => {
+    const slug = role.chairman ? 'chairman' : role.id
+
+    if (activeWorkspaceId) {
+      try {
+        const result = await window.electronAPI.readSkillContent(
+          activeWorkspaceId,
+          slug,
+          activeSessionWorkingDirectory,
+        )
+        return { content: result.content, path: result.path.replace(/\/SKILL\.md$/, '') }
+      } catch (error) {
+        console.warn(`[SkillCrew] Failed to read @${slug} from workspace skills`, error)
+      }
+    }
+
+    if (role.skill?.content) {
+      return {
+        content: [
+        `---`,
+        `name: ${role.skill.metadata.name || role.skill.slug}`,
+        `description: ${role.skill.metadata.description || ''}`,
+        `---`,
+        role.skill.content,
+        ].join('\n'),
+        path: role.skill.path,
+      }
+    }
+
+    return {
+      content: [
+        `---`,
+        `name: ${slug}`,
+        `description: ${role.description}`,
+        `---`,
+        `You are ${role.name}. ${role.description}`,
+      ].join('\n'),
+    }
+  }, [activeSessionWorkingDirectory, activeWorkspaceId])
+
+  const runRoleWithModel = React.useCallback(async ({
+    role,
+    prompt,
+    quote,
+    branchId,
+    messageId,
+    selectedRoles,
+  }: {
+    role: CrewRole
+    prompt: string
+    quote?: CrewMessage
+    branchId: string
+    messageId: string
+    selectedRoles: CrewRole[]
+  }) => {
+    if (!activeWorkspaceId) {
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: '无法调用模型：当前没有 active workspace。',
+        artifacts: ['skill_error'],
+      }))
+      return
+    }
+
+    try {
+      const skill = await resolveSkillContent(role)
+      const invocationPrompt = buildSkillInvocationPrompt({
+        role,
+        prompt,
+        quote,
+        activeChannel,
+        selectedRoles,
+        skillContent: skill.content,
+        skillDirectoryPath: skill.path,
+      })
+      const runStartedAt = Date.now()
+      const contextChars = invocationPrompt.length
+      const contextTokensEstimate = estimateTokens(invocationPrompt)
+
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: '已把 SKILL.md 和用户请求交给 Codex OAuth 会话，等待回复...',
+        artifacts: ['codex_oauth_invoked', 'model_pending'],
+        runStartedAt,
+        runEndedAt: undefined,
+        elapsedMs: undefined,
+        contextChars,
+        contextTokensEstimate,
+      }))
+
+      const result = await window.electronAPI.runCodexSkill({
+        prompt: invocationPrompt,
+        workingDirectory: inferSkillWorkspaceRoot(skill.path) ?? activeSessionWorkingDirectory,
+        timeoutMs: role.id === 'skillcreator' ? 0 : 3_000_000,
+        reasoningEffort: 'xhigh',
+      })
+      await refreshSkills()
+
+      if (result.success && result.text?.trim()) {
+        const runEndedAt = Date.now()
+        updateMessageInBranch(branchId, messageId, (message) => ({
+          ...message,
+          body: result.text!.trim(),
+          artifacts: ['codex_oauth_reply', 'skill_reply'],
+          runEndedAt,
+          elapsedMs: runEndedAt - runStartedAt,
+        }))
+        return
+      }
+
+      const errorText = result.error || result.stderr || result.stdout || 'Codex CLI 没有返回可用文本。'
+      const runEndedAt = Date.now()
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: [
+          makeSkillFallbackReply(role, prompt, errorText),
+          result.logPath ? `调试日志: ${result.logPath}` : '',
+        ].filter(Boolean).join('\n\n'),
+        artifacts: ['skill_error', 'skill_fallback', 'codex_oauth_error'],
+        runEndedAt,
+        elapsedMs: runEndedAt - runStartedAt,
+      }))
+    } catch (error) {
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: makeSkillFallbackReply(role, prompt, error instanceof Error ? error.message : String(error)),
+        artifacts: ['skill_error', 'skill_fallback', 'codex_oauth_error'],
+      }))
+    }
+  }, [activeChannel, activeSessionWorkingDirectory, activeWorkspaceId, refreshSkills, resolveSkillContent, updateMessageInBranch])
+
+  const runModelSelfWithCodex = React.useCallback(async ({
+    prompt,
+    quote,
+    branchId,
+    messageId,
+  }: {
+    prompt: string
+    quote?: CrewMessage
+    branchId: string
+    messageId: string
+  }) => {
+    if (!activeWorkspaceId) {
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: makeModelSelfReply(prompt, quote),
+        artifacts: ['model_self_reply', 'model_fallback'],
+      }))
+      return
+    }
+
+    try {
+      const invocationPrompt = buildModelSelfInvocationPrompt({
+        prompt,
+        quote,
+        activeChannel,
+      })
+      const runStartedAt = Date.now()
+      const contextChars = invocationPrompt.length
+      const contextTokensEstimate = estimateTokens(invocationPrompt)
+
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: '未检测到有效 @skill，已把用户请求交给 Codex OAuth 会话，等待模型自身回复...',
+        artifacts: ['codex_oauth_invoked', 'model_pending', 'model_self_pending'],
+        runStartedAt,
+        runEndedAt: undefined,
+        elapsedMs: undefined,
+        contextChars,
+        contextTokensEstimate,
+      }))
+
+      const result = await window.electronAPI.runCodexSkill({
+        prompt: invocationPrompt,
+        workingDirectory: activeSessionWorkingDirectory,
+        timeoutMs: 3_000_000,
+        reasoningEffort: 'xhigh',
+      })
+
+      if (result.success && result.text?.trim()) {
+        const runEndedAt = Date.now()
+        updateMessageInBranch(branchId, messageId, (message) => ({
+          ...message,
+          body: result.text!.trim(),
+          artifacts: ['codex_oauth_reply', 'model_self_reply'],
+          runEndedAt,
+          elapsedMs: runEndedAt - runStartedAt,
+        }))
+        return
+      }
+
+      const errorText = result.error || result.stderr || result.stdout || 'Codex CLI 没有返回可用文本。'
+      const runEndedAt = Date.now()
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: [
+          `模型连接暂不可用：${errorText.length > 180 ? `${errorText.slice(0, 180)}...` : errorText}`,
+          '以下是本地降级发言：未执行真实模型自身回答。',
+          '',
+          makeModelSelfReply(prompt, quote),
+          result.logPath ? `调试日志: ${result.logPath}` : '',
+        ].filter(Boolean).join('\n\n'),
+        artifacts: ['model_self_reply', 'model_fallback', 'codex_oauth_error'],
+        runEndedAt,
+        elapsedMs: runEndedAt - runStartedAt,
+      }))
+    } catch (error) {
+      updateMessageInBranch(branchId, messageId, (message) => ({
+        ...message,
+        body: [
+          `模型连接暂不可用：${error instanceof Error ? error.message : String(error)}`,
+          '以下是本地降级发言：未执行真实模型自身回答。',
+          '',
+          makeModelSelfReply(prompt, quote),
+        ].join('\n\n'),
+        artifacts: ['model_self_reply', 'model_fallback', 'codex_oauth_error'],
+      }))
+    }
+  }, [activeChannel, activeSessionWorkingDirectory, activeWorkspaceId, updateMessageInBranch])
 
   const updateDraftAndMentionState = React.useCallback((value: string, cursor: number) => {
     setDraft(value)
@@ -338,6 +1149,7 @@ export default function SkillCrewPage() {
     if (!text) return
 
     const now = formatTime()
+    const branchId = activeBranchId
     const userMessage: CrewMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -347,7 +1159,9 @@ export default function SkillCrewPage() {
       quoteId,
     }
 
-    const selectedIds = selectedTargetIds.filter((id) => roles.some((role) => role.id === id))
+    const typedTargetIds = findMentionedRoleIds(text, mentionableRoles)
+    const selectedIds = Array.from(new Set([...selectedTargetIds, ...typedTargetIds]))
+      .filter((id) => roles.some((role) => role.id === id))
     const selectedRoles = selectedIds
       .map((id) => roles.find((role) => role.id === id))
       .filter((role): role is CrewRole => Boolean(role))
@@ -362,56 +1176,68 @@ export default function SkillCrewPage() {
       ? (explicitTargets.length > 0 ? explicitTargets : mentionableRoles.filter((role) => !role.chairman).slice(0, 4))
       : explicitTargets
 
+    const chairmanRole = roles.find((role) => role.chairman)
+    const executionRoles = hasChairman && chairmanRole
+      ? [...targets, chairmanRole]
+      : targets
+
     const replies: CrewMessage[] = []
-    for (const role of targets) {
+    const modelRuns: Array<{ role: CrewRole; messageId: string }> = []
+    let modelSelfMessageId: string | undefined
+    for (const role of executionRoles) {
+      const messageId = `agent-${role.id}-${Date.now()}-${replies.length}`
       replies.push({
-        id: `agent-${role.id}-${Date.now()}-${replies.length}`,
+        id: messageId,
         role: role.chairman ? 'chairman' : 'agent',
         author: role.name,
         handle: role.handle,
-        body: makeAgentReply(role, prompt, quote),
+        skillId: role.chairman ? 'chairman' : role.id,
+        body: '正在准备调用模型...',
         timestamp: now,
         quoteId: quote?.id,
-        artifacts: ['skill_task_packet', 'skill_reply'],
+        artifacts: ['skill_task_packet', 'model_pending'],
       })
-    }
-
-    if (hasChairman) {
-      replies.push({
-        id: `chairman-${Date.now()}`,
-        role: 'chairman',
-        author: '董事长',
-        handle: '@董事长',
-        body: [
-          `已召集：${targets.map((role) => role.handle).join('、') || '默认核心 crew'}`,
-          `议题：${prompt || '未命名议题'}`,
-          '阶段结论：先保留各 skill 原始发言；下一轮只追问分歧最大的点；需要执行时指定主责 skill 和产物格式。',
-        ].join('\n'),
-        timestamp: now,
-        quoteId: quote?.id,
-        artifacts: ['chairman_synthesis'],
-      })
+      modelRuns.push({ role, messageId })
     }
 
     if (!hasChairman && replies.length === 0) {
+      modelSelfMessageId = `model-${Date.now()}`
       replies.push({
-        id: `model-${Date.now()}`,
+        id: modelSelfMessageId,
         role: 'agent',
         author: '模型自身',
         handle: '@model',
-        body: makeModelSelfReply(prompt, quote),
+        body: '正在准备调用模型自身...',
         timestamp: now,
         quoteId: quote?.id,
-        artifacts: ['model_self_reply'],
+        artifacts: ['model_pending', 'model_self_pending'],
       })
     }
 
     updateActiveMessages((prev) => [...prev, userMessage, ...replies])
+    for (const run of modelRuns) {
+      void runRoleWithModel({
+        role: run.role,
+        prompt,
+        quote,
+        branchId,
+        messageId: run.messageId,
+        selectedRoles,
+      })
+    }
+    if (modelSelfMessageId) {
+      void runModelSelfWithCodex({
+        prompt,
+        quote,
+        branchId,
+        messageId: modelSelfMessageId,
+      })
+    }
     setDraft('')
     setMentionState(null)
     setSelectedTargetIds([])
     setQuoteId(undefined)
-  }, [draft, mentionableRoles, quote, quoteId, roles, selectedTargetIds, updateActiveMessages])
+  }, [activeBranchId, draft, mentionableRoles, quote, quoteId, roles, runModelSelfWithCodex, runRoleWithModel, selectedTargetIds, updateActiveMessages])
 
   const copyMessage = React.useCallback(async (message: CrewMessage) => {
     await navigator.clipboard.writeText(buildMessageClipboardText(message))
@@ -425,6 +1251,73 @@ export default function SkillCrewPage() {
     setCopiedId(activeBranch.id)
     window.setTimeout(() => setCopiedId((current) => current === activeBranch.id ? undefined : current), 1200)
   }, [activeBranch])
+
+  const exportConversationMarkdown = React.useCallback(() => {
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    downloadMarkdown(
+      `skill-crew-${formatChannelLabel(activeChannel)}-${timestamp}.md`,
+      buildConversationMarkdown(branches, activeChannel)
+    )
+  }, [activeChannel, branches])
+
+  const recordSkillFeedback = React.useCallback(async (message: CrewMessage, verdict: SkillFeedbackVerdict) => {
+    if (!activeWorkspaceId || !message.skillId) {
+      return
+    }
+
+    const messageIndex = messages.findIndex((entry) => entry.id === message.id)
+    const previousUserMessage = messageIndex >= 0
+      ? messages.slice(0, messageIndex).reverse().find((entry) => entry.role === 'user')
+      : undefined
+    const option = skillFeedbackOptions.find((entry) => entry.verdict === verdict)
+
+    setFeedbackPendingId(message.id)
+    try {
+      const result = await window.electronAPI.recordSkillFeedback({
+        workspaceId: activeWorkspaceId,
+        skillId: message.skillId,
+        skillName: message.author,
+        handle: message.handle,
+        verdict,
+        channel: activeChannel,
+        branchId: activeBranchId,
+        messageId: message.id,
+        messageBody: message.body,
+        prompt: previousUserMessage?.body,
+        artifacts: message.artifacts ?? [],
+        recordedAt: new Date().toISOString(),
+      })
+
+      updateMessageInBranch(activeBranchId, message.id, (current) => {
+        const currentArtifacts = current.artifacts ?? []
+        const nextArtifacts = [
+          ...currentArtifacts.filter((artifact) => (
+            !artifact.startsWith('feedback_') && artifact !== 'skill_feedback_recorded' && artifact !== 'skill_feedback_error'
+          )),
+          option?.artifact ?? 'feedback_recorded',
+          'skill_feedback_recorded',
+        ]
+
+        return {
+          ...current,
+          feedbackVerdict: verdict,
+          feedbackSavedPath: result.path,
+          artifacts: nextArtifacts,
+        }
+      })
+    } catch (error) {
+      console.warn('[SkillCrew] Failed to record skill feedback', error)
+      updateMessageInBranch(activeBranchId, message.id, (current) => ({
+        ...current,
+        artifacts: [
+          ...(current.artifacts ?? []).filter((artifact) => artifact !== 'skill_feedback_error'),
+          'skill_feedback_error',
+        ],
+      }))
+    } finally {
+      setFeedbackPendingId((current) => current === message.id ? undefined : current)
+    }
+  }, [activeBranchId, activeChannel, activeWorkspaceId, messages, updateMessageInBranch])
 
   const branchFromMessage = React.useCallback((message: CrewMessage) => {
     const sourceMessages = messages.slice(0, messages.findIndex((entry) => entry.id === message.id) + 1)
@@ -461,7 +1354,10 @@ export default function SkillCrewPage() {
         title={`#${formatChannelLabel(activeChannel)}`}
         actions={
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1 rounded-[6px] border border-border/60 bg-background px-2 py-1">
+            <span
+              className="inline-flex items-center gap-1 rounded-[6px] border border-border/60 bg-background px-2 py-1"
+              title="本地编排模式：在本机解析 @skill、读取本地 SKILL.md，并通过 Codex CLI/OAuth 发起调用。不是云端在线状态。"
+            >
               <Radio className="h-3 w-3 text-emerald-500" />
               local orchestration
             </span>
@@ -471,6 +1367,30 @@ export default function SkillCrewPage() {
 
       <div className="grid h-full min-h-0 max-h-full flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_240px] border-t border-border/50 max-[980px]:grid-cols-1">
         <main ref={mainRef} className="flex h-full min-h-0 max-h-full flex-col overflow-hidden">
+          <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-4">
+            {[
+              { id: 'chat', label: '聊天' },
+              { id: 'moments', label: '朋友圈' },
+              { id: 'agentos', label: 'AgentOS' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveCrewSurface(tab.id as typeof activeCrewSurface)}
+                className={cn(
+                  'inline-flex h-8 items-center rounded-[7px] px-3 text-sm transition-colors',
+                  activeCrewSurface === tab.id
+                    ? 'bg-foreground text-background'
+                    : 'text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground',
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {activeCrewSurface === 'chat' ? (
+            <>
           <ScrollArea className="min-h-0 flex-1">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 py-5 pb-28">
               <div className="border-b border-border/60 pb-4">
@@ -516,11 +1436,24 @@ export default function SkillCrewPage() {
                     {copiedId === activeBranch?.id ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                     {copiedId === activeBranch?.id ? 'copied' : 'copy branch'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={exportConversationMarkdown}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-border/70 bg-background px-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/[0.04] hover:text-foreground"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    export md
+                  </button>
                 </div>
               </div>
 
               {messages.map((message) => {
                 const quotedMessage = message.quoteId ? messages.find((entry) => entry.id === message.quoteId) : undefined
+                const canRecordFeedback = Boolean(
+                  message.skillId
+                  && message.role !== 'user'
+                  && !message.artifacts?.includes('model_pending')
+                )
                 return (
                   <article key={message.id} className="group flex gap-3">
                     <Avatar message={message} roles={roles} />
@@ -538,6 +1471,15 @@ export default function SkillCrewPage() {
                       <div className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90">
                         {message.body}
                       </div>
+                      {buildRunMetaParts(message, runClockNow).length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {buildRunMetaParts(message, runClockNow).map((part) => (
+                            <span key={part} className="rounded-[5px] bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-700 dark:text-emerald-300">
+                              {part}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       {message.artifacts && (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {message.artifacts.map((artifact) => (
@@ -564,6 +1506,36 @@ export default function SkillCrewPage() {
                           onClick={() => branchFromMessage(message)}
                         />
                       </div>
+                      {canRecordFeedback && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <span className="mr-0.5">本次表现</span>
+                          {skillFeedbackOptions.map((option) => {
+                            const selected = message.feedbackVerdict === option.verdict
+                            return (
+                              <button
+                                key={option.verdict}
+                                type="button"
+                                disabled={feedbackPendingId === message.id}
+                                onClick={() => void recordSkillFeedback(message, option.verdict)}
+                                className={cn(
+                                  'inline-flex h-6 items-center rounded-[5px] border px-2 transition-colors disabled:cursor-wait disabled:opacity-60',
+                                  selected
+                                    ? 'border-foreground bg-foreground text-background'
+                                    : 'border-border/50 bg-background hover:bg-foreground/[0.04] hover:text-foreground'
+                                )}
+                                title={selected && message.feedbackSavedPath ? `已记录到 ${message.feedbackSavedPath}` : '记录这次 skill 对话体验'}
+                              >
+                                {option.label}
+                              </button>
+                            )
+                          })}
+                          {message.feedbackSavedPath && (
+                            <span className="rounded-[5px] bg-foreground/[0.06] px-1.5 py-0.5">
+                              已记录
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </article>
                 )
@@ -597,7 +1569,13 @@ export default function SkillCrewPage() {
                     <button
                       key={target.id}
                       type="button"
-                      onClick={() => setSelectedTargetIds((current) => current.filter((id) => id !== target.id))}
+                      onClick={() => {
+                        const nextDraft = removeMentionHandle(draft, target.handle)
+                        setDraft(nextDraft)
+                        setMentionState(parseMentionState(nextDraft, textareaRef.current?.selectionStart ?? nextDraft.length))
+                        setSelectedTargetIds((current) => current.filter((id) => id !== target.id))
+                        window.requestAnimationFrame(() => textareaRef.current?.focus())
+                      }}
                       className={cn(
                         'inline-flex h-6 items-center gap-1 rounded-[5px] border px-2 text-xs transition-colors',
                         target.chairman
@@ -688,7 +1666,7 @@ export default function SkillCrewPage() {
                       sendMessage()
                     }
                   }}
-                  className="max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 outline-none placeholder:text-muted-foreground"
+                  className="max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-3 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
                   placeholder="输入 @ 从当前文件夹选择 skill；不选则用模型自身回答。"
                 />
                 <Button
@@ -702,6 +1680,21 @@ export default function SkillCrewPage() {
               </div>
             </div>
           </div>
+            </>
+          ) : (
+            <SkillMomentsView
+              mode={activeCrewSurface}
+              roomLabel={formatChannelLabel(activeChannel)}
+              moments={skillMoments}
+              roles={roles}
+              loading={skillMomentsLoading}
+              running={skillMomentsRunning}
+              lastRunPath={skillMomentsLastRunPath}
+              pendingFeedbackKey={skillMomentFeedbackPendingKey}
+              onRefresh={() => void runSkillMomentCycle()}
+              onFeedback={(target, verdict) => void recordSkillMomentFeedback(target, verdict)}
+            />
+          )}
         </main>
 
         <aside className="border-l border-border/60 bg-foreground/[0.015] max-[980px]:hidden">

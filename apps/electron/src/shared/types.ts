@@ -314,6 +314,148 @@ export type FlowEpicChatStatusEvent =
   | { epicId: string; type: 'text_complete' }
   | { epicId: string; type: 'error'; errorType: string; message: string }
 
+export type CodexSkillRunResult = {
+  success: boolean
+  text?: string
+  error?: string
+  exitCode?: number | null
+  stdout?: string
+  stderr?: string
+  logPath?: string
+}
+
+export type SkillFeedbackVerdict = 1 | 2 | 3
+
+export type SkillFeedbackRecordInput = {
+  workspaceId: string
+  skillId: string
+  skillName?: string
+  handle?: string
+  verdict: SkillFeedbackVerdict
+  channel: string
+  branchId: string
+  messageId: string
+  messageBody: string
+  prompt?: string
+  artifacts?: string[]
+  recordedAt?: string
+}
+
+export type SkillFeedbackRecordResult = {
+  success: boolean
+  path: string
+}
+
+export type SkillMomentSourceKind = 'china_daily' | 'x' | 'polymarket' | 'manual' | 'mock'
+
+export type SkillMomentSourceDigest = {
+  id: string
+  source: SkillMomentSourceKind
+  title: string
+  url: string
+  summary: string
+  publishedAt?: string
+  capturedAt: string
+  status: 'ready' | 'mock' | 'unavailable' | 'stale'
+}
+
+export type SkillMomentCritique = {
+  id: string
+  parentMomentId: string
+  criticSkillId: string
+  criticSkillName: string
+  criticHandle: string
+  body: string
+  createdAt: string
+  artifacts?: string[]
+  feedbackVerdict?: SkillFeedbackVerdict
+  feedbackSavedPath?: string
+}
+
+export type SkillMoment = {
+  id: string
+  roomId: string
+  skillId: string
+  skillName: string
+  handle: string
+  body: string
+  confidence: 'low' | 'medium' | 'high'
+  createdAt: string
+  sources: SkillMomentSourceDigest[]
+  critiques: SkillMomentCritique[]
+  artifacts?: string[]
+  feedbackVerdict?: SkillFeedbackVerdict
+  feedbackSavedPath?: string
+}
+
+export type SkillMomentSkillInput = {
+  id: string
+  name: string
+  handle: string
+  description?: string
+}
+
+export type SkillMomentListInput = {
+  workspaceId: string
+  roomId?: string
+  limit?: number
+}
+
+export type SkillMomentListResult = {
+  moments: SkillMoment[]
+}
+
+export type SkillMomentRunCycleInput = {
+  workspaceId: string
+  roomId?: string
+  skills?: SkillMomentSkillInput[]
+  skillSlugs?: string[]
+  workingDirectory?: string
+  maxMoments?: number
+  maxCriticsPerMoment?: number
+}
+
+export type SkillMomentRunCycleResult = {
+  success: boolean
+  runId: string
+  moments: SkillMoment[]
+  sourceDigests: SkillMomentSourceDigest[]
+  path: string
+}
+
+export type SkillMomentFeedbackRecordInput = {
+  workspaceId: string
+  roomId: string
+  momentId: string
+  critiqueId?: string
+  skillId: string
+  skillName?: string
+  handle?: string
+  verdict: SkillFeedbackVerdict
+  messageBody: string
+  prompt?: string
+  sources?: SkillMomentSourceDigest[]
+  recordedAt?: string
+}
+
+export type SkillMomentFeedbackRecordResult = {
+  success: boolean
+  path: string
+}
+
+export type SkillCrewImportSkillArgs = {
+  workspaceId: string
+  sourceSkillPath: string
+  slug: string
+  targetFolderPath: string
+  workingDirectory?: string
+}
+
+export type SkillCrewImportSkillResult = {
+  skill: LoadedSkill
+  targetPath: string
+}
+
 export interface ElectronAPI {
   // Session management
   getSessions(): Promise<Session[]>
@@ -575,6 +717,8 @@ export interface ElectronAPI {
 
   // Skills
   getSkills(workspaceId: string, workingDirectory?: string): Promise<LoadedSkill[]>
+  refreshSkillCrewSkills(workspaceId: string, workingDirectory?: string): Promise<LoadedSkill[]>
+  importSkillToCrewFolder(args: SkillCrewImportSkillArgs): Promise<SkillCrewImportSkillResult>
   getSkillFiles?(workspaceId: string, skillSlug: string): Promise<SkillFile[]>
   readSkillContent(workspaceId: string, skillSlug: string, workingDirectory?: string): Promise<{ content: string; path: string }>
   getSkillFolders(workspaceId: string): Promise<SkillFolder[]>
@@ -690,6 +834,17 @@ export interface ElectronAPI {
   getGitBranch(dirPath: string): Promise<string | null>
   getGitRoot(dirPath: string): Promise<string | null>
   getGitInfo(dirPath: string): Promise<FlowGitInfo | null>
+  runCodexSkill(args: {
+    prompt: string
+    workingDirectory?: string
+    model?: string
+    timeoutMs?: number
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
+  }): Promise<CodexSkillRunResult>
+  recordSkillFeedback(args: SkillFeedbackRecordInput): Promise<SkillFeedbackRecordResult>
+  listSkillMoments(args: SkillMomentListInput): Promise<SkillMomentListResult>
+  runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<SkillMomentRunCycleResult>
+  recordSkillMomentFeedback(args: SkillMomentFeedbackRecordInput): Promise<SkillMomentFeedbackRecordResult>
 
   // Flow-next task planning
   flowProjectCheckStatus(workspaceRoot: string): Promise<{ status: FlowProjectStatus; error?: string }>

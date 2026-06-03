@@ -16,7 +16,9 @@ import {
   Pencil,
   Plus,
   Save,
+  Search,
   Sparkles,
+  UserPlus,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -152,6 +154,10 @@ export function SkillCrewNavigatorPanel() {
   const [draggingSkillSlug, setDraggingSkillSlug] = React.useState<string | null>(null)
   const [addSkillOpen, setAddSkillOpen] = React.useState(false)
   const [addSkillDefault, setAddSkillDefault] = React.useState('创建一个新的 Crew skill。')
+  const [importSkillOpen, setImportSkillOpen] = React.useState(false)
+  const [importTargetFolderId, setImportTargetFolderId] = React.useState<string | null>(null)
+  const [importQuery, setImportQuery] = React.useState('')
+  const [importingSkillSlug, setImportingSkillSlug] = React.useState<string | null>(null)
   const [inspectedSkillSlug, setInspectedSkillSlug] = React.useState<string | null>(null)
   const [skillFileDraft, setSkillFileDraft] = React.useState('')
   const [skillFilePathDraft, setSkillFilePathDraft] = React.useState('')
@@ -173,6 +179,10 @@ export function SkillCrewNavigatorPanel() {
     () => skills.find((skill) => skill.slug === inspectedSkillSlug) ?? null,
     [inspectedSkillSlug, skills],
   )
+  const importTargetFolder = React.useMemo(
+    () => folderById.get(importTargetFolderId ?? activeChannel) ?? folderById.get('debate') ?? folders[0] ?? null,
+    [activeChannel, folderById, folders, importTargetFolderId],
+  )
 
   const skillsByFolder = React.useMemo(() => {
     const groups = new Map<string, LoadedSkill[]>()
@@ -193,6 +203,35 @@ export function SkillCrewNavigatorPanel() {
 
     return groups
   }, [folderIds, folders, skillPlacement, skills])
+
+  const getSkillFolderId = React.useCallback((skill: LoadedSkill) => (
+    skillPlacement[skill.slug] ?? inferSkillPhysicalFolderId(skill, folderIds) ?? inferSkillCrewRoomId(skill)
+  ), [folderIds, skillPlacement])
+
+  const importSkillCandidates = React.useMemo(() => {
+    const query = importQuery.trim().toLocaleLowerCase()
+    return skills
+      .filter((skill) => skill.slug !== 'chairman')
+      .filter((skill) => {
+        if (!query) {
+          return true
+        }
+
+        const haystack = [
+          skill.slug,
+          skill.metadata.name,
+          skill.metadata.description,
+          skill.path,
+          skill.source,
+        ].filter(Boolean).join(' ').toLocaleLowerCase()
+        return haystack.includes(query)
+      })
+      .sort((a, b) => {
+        const sourceOrder = sourceRank(a.source) - sourceRank(b.source)
+        return sourceOrder === 0 ? a.slug.localeCompare(b.slug) : sourceOrder
+      })
+      .slice(0, 80)
+  }, [importQuery, skills])
 
   const childFoldersByParent = React.useMemo(() => {
     const groups = new Map<string | null, CrewFolder[]>()
@@ -393,6 +432,13 @@ export function SkillCrewNavigatorPanel() {
     [activeChannel, folderById],
   )
 
+  const beginImportSkill = React.useCallback((folder: CrewFolder | null) => {
+    const target = folder ?? folderById.get(activeChannel) ?? folderById.get('debate') ?? null
+    setImportTargetFolderId(target?.id ?? null)
+    setImportQuery('')
+    setImportSkillOpen(true)
+  }, [activeChannel, folderById])
+
   const moveSkill = React.useCallback(
     async (skillSlug: string, folderId: string) => {
       const folder = folderById.get(folderId)
@@ -431,6 +477,38 @@ export function SkillCrewNavigatorPanel() {
     },
     [activeWorkspaceId, folderById, refreshSkills, skills],
   )
+
+  const importInstalledSkill = React.useCallback(async (skill: LoadedSkill) => {
+    if (!activeWorkspaceId || !importTargetFolder) {
+      return
+    }
+
+    setImportingSkillSlug(skill.slug)
+    try {
+      if (skill.source === 'workspace') {
+        await moveSkill(skill.slug, importTargetFolder.id)
+      } else {
+        await window.electronAPI.importSkillToCrewFolder({
+          workspaceId: activeWorkspaceId,
+          sourceSkillPath: skill.path,
+          slug: skill.slug,
+          targetFolderPath: importTargetFolder.relativePath,
+          workingDirectory: activeSessionWorkingDirectory,
+        })
+        await refreshSkills()
+        setExpanded((current) => new Set([...current, importTargetFolder.id]))
+        setActiveChannel(importTargetFolder.id)
+        toast.success(`已导入 @${skill.slug} 到 #${importTargetFolder.label}`)
+      }
+      setImportSkillOpen(false)
+    } catch (error) {
+      toast.error(`导入 @${skill.slug} 失败`, {
+        description: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      setImportingSkillSlug((current) => current === skill.slug ? null : current)
+    }
+  }, [activeSessionWorkingDirectory, activeWorkspaceId, importTargetFolder, moveSkill, refreshSkills, setActiveChannel])
 
   const openSkillPath = React.useCallback(async (skill: LoadedSkill) => {
     await window.electronAPI.openFile(skillFilePath(skill))
@@ -527,6 +605,10 @@ export function SkillCrewNavigatorPanel() {
                 <Plus className="mr-2 size-4" />
                 新建 Skill
               </StyledContextMenuItem>
+              <StyledContextMenuItem onSelect={() => beginImportSkill(folder)}>
+                <UserPlus className="mr-2 size-4" />
+                导入已安装 Skill
+              </StyledContextMenuItem>
               <StyledContextMenuSeparator />
               <StyledContextMenuItem onSelect={() => copyText(folder.physicalPath, '物理路径')}>
                 <Copy className="mr-2 size-4" />
@@ -548,6 +630,7 @@ export function SkillCrewNavigatorPanel() {
     [
       activeChannel,
       beginCreateSkill,
+      beginImportSkill,
       childFoldersByParent,
       createFolder,
       draggingSkillSlug,
@@ -596,6 +679,14 @@ export function SkillCrewNavigatorPanel() {
                 }
               />
             ) : null}
+            <button
+              type="button"
+              className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={() => beginImportSkill(null)}
+              title="导入本机已安装 Skill 到当前聊天室"
+            >
+              <UserPlus className="size-4" />
+            </button>
           </div>
         </div>
       </div>
@@ -631,8 +722,24 @@ export function SkillCrewNavigatorPanel() {
             <Plus className="mr-2 size-4" />
             新建 Skill
           </StyledContextMenuItem>
+          <StyledContextMenuItem onSelect={() => beginImportSkill(null)}>
+            <UserPlus className="mr-2 size-4" />
+            导入已安装 Skill
+          </StyledContextMenuItem>
         </StyledContextMenuContent>
       </ContextMenu>
+
+      <ImportSkillDialog
+        open={importSkillOpen}
+        targetFolder={importTargetFolder}
+        skills={importSkillCandidates}
+        query={importQuery}
+        importingSkillSlug={importingSkillSlug}
+        getSkillFolderId={getSkillFolderId}
+        onOpenChange={setImportSkillOpen}
+        onQueryChange={setImportQuery}
+        onImport={(skill) => void importInstalledSkill(skill)}
+      />
 
       <SkillInspectorDialog
         skill={inspectedSkill}
@@ -739,6 +846,12 @@ function builtinOrder(id: string): number {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index
 }
 
+function sourceRank(source: LoadedSkill['source']): number {
+  if (source === 'global') return 0
+  if (source === 'project') return 1
+  return 2
+}
+
 function inferCreatorLabel(skill: LoadedSkill, fileContent: string): string {
   const creatorMatch = fileContent.match(/^creator:\s*(.+)$/m)
   if (creatorMatch?.[1]?.trim()) {
@@ -754,6 +867,109 @@ function inferCreatorLabel(skill: LoadedSkill, fileContent: string): string {
   }
 
   return 'global skill / ~/.agents/skills'
+}
+
+function ImportSkillDialog({
+  open,
+  targetFolder,
+  skills,
+  query,
+  importingSkillSlug,
+  getSkillFolderId,
+  onOpenChange,
+  onQueryChange,
+  onImport,
+}: {
+  open: boolean
+  targetFolder: CrewFolder | null
+  skills: LoadedSkill[]
+  query: string
+  importingSkillSlug: string | null
+  getSkillFolderId: (skill: LoadedSkill) => string
+  onOpenChange: (open: boolean) => void
+  onQueryChange: (query: string) => void
+  onImport: (skill: LoadedSkill) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[76vh] max-w-[min(820px,calc(100vw-32px))] grid-rows-none flex-col gap-0 p-0">
+        <DialogHeader className="border-b border-border/60 px-5 py-4">
+          <DialogTitle>导入已安装 Skill</DialogTitle>
+          <DialogDescription>
+            {targetFolder ? `导入到 #${targetFolder.label}。global/project 会复制成本聊天室本地 skill，workspace skill 会移动进来。` : '先选择一个 Crew 文件夹。'}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="border-b border-border/60 px-5 py-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              autoFocus
+              className="h-9 w-full rounded-md border border-border/70 bg-background pl-8 pr-3 text-sm outline-none focus:border-foreground/40"
+              placeholder="搜索 slug、name、description 或路径"
+            />
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {skills.length === 0 ? (
+            <div className="px-2 py-8 text-center text-sm text-muted-foreground">
+              没有匹配的已安装 skill
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {skills.map((skill) => {
+                const currentFolderId = getSkillFolderId(skill)
+                const alreadyInTarget = Boolean(targetFolder && skill.source === 'workspace' && currentFolderId === targetFolder.id)
+                const importing = importingSkillSlug === skill.slug
+                return (
+                  <div key={`${skill.source}:${skill.path}`} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/70">
+                    <div className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                      <Bot className="size-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <div className="truncate text-sm font-medium">@{skill.slug}</div>
+                        <span className="shrink-0 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {SOURCE_LABELS[skill.source]}
+                        </span>
+                        {skill.source === 'workspace' ? (
+                          <span className="shrink-0 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            #{currentFolderId.split('/').pop()}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {skill.metadata.description || shortPath(skill.path)}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={alreadyInTarget ? 'outline' : 'default'}
+                      disabled={!targetFolder || importing || alreadyInTarget}
+                      onClick={() => onImport(skill)}
+                    >
+                      {importing ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
+                      {alreadyInTarget ? '已在当前群' : skill.source === 'workspace' ? '移动进来' : '导入'}
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="border-t border-border/60 px-5 py-3">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            关闭
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 function SkillInspectorDialog({

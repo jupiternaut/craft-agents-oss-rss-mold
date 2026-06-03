@@ -6,6 +6,7 @@
  */
 
 import type { PlatformServices } from '../runtime/platform'
+import { resolveElectronAppRoot } from './app-root'
 
 export interface ElectronPlatformOptions {
   app: Electron.App
@@ -22,7 +23,7 @@ export function createElectronPlatform(opts: ElectronPlatformOptions): PlatformS
   const { app, nativeImage, shell, nativeTheme, logger } = opts
 
   return {
-    appRootPath: app.isPackaged ? app.getAppPath() : process.cwd(),
+    appRootPath: resolveElectronAppRoot(app),
     resourcesPath: process.resourcesPath,
     isPackaged: app.isPackaged,
     appVersion: app.getVersion(),

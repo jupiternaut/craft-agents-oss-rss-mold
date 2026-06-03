@@ -4,9 +4,9 @@ import { loadShellEnv } from './shell-env'
 loadShellEnv()
 
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell, type IpcMainInvokeEvent } from 'electron'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
-import { hostname, homedir } from 'os'
+import { hostname, homedir, tmpdir } from 'os'
 import * as Sentry from '@sentry/electron/main'
 
 // Initialize Sentry error tracking as early as possible after app import.
@@ -68,14 +68,16 @@ setupI18n()
 const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
 Sentry.setUser({ id: machineId })
 
-import { basename, join, delimiter } from 'path'
+import { basename, dirname, join, delimiter, relative, resolve } from 'path'
 import { existsSync, readFileSync } from 'fs'
+import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
 import { registerAllRpcHandlers } from './handlers/index'
 import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient } from '@craft-agent/server-core/handlers/rpc'
 import type { PlatformServices } from '../runtime/platform'
 import { createElectronPlatform } from './platform'
+import { resolveElectronAppRoot } from './app-root'
 import type { HandlerDeps } from './handlers/handler-deps'
 import { bootstrapServer, releaseServerLock } from '@craft-agent/server-core/bootstrap'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
@@ -108,7 +110,7 @@ import { FlowWatcher } from './lib/flow-watcher'
 import { showFlowNotification, initFlowNotifications } from './lib/flow-notifications'
 import { abortChat, executeChat, type RegisteredProject } from './lib/epic-chat-agent'
 import { applyPlan, executePlan, type PlanResult } from './lib/planning-agent'
-import type { FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState } from '../shared/types'
+import type { CodexSkillRunResult, FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState, SkillCrewImportSkillArgs, SkillCrewImportSkillResult, SkillFeedbackRecordInput, SkillMoment, SkillMomentCritique, SkillMomentFeedbackRecordInput, SkillMomentListInput, SkillMomentRunCycleInput, SkillMomentRunCycleResult, SkillMomentSkillInput, SkillMomentSourceDigest } from '../shared/types'
 import type { TaskStatus } from '../shared/flow-schemas'
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
@@ -145,7 +147,7 @@ if (isDebugMode) {
   // Runtime resolver hints for shared session tools
   process.env.CRAFT_IS_PACKAGED = app.isPackaged ? '1' : '0'
   process.env.CRAFT_RESOURCES_BASE = resourcesBase
-  process.env.CRAFT_APP_ROOT = app.isPackaged ? app.getAppPath() : process.cwd()
+  process.env.CRAFT_APP_ROOT = resolveElectronAppRoot(app)
 
   process.env.CRAFT_UV = bundledUvExists ? uvBinary : (fallbackUv ?? uvBinary)
 
@@ -289,6 +291,772 @@ function readFlowProjectContext(workspaceRoot: string): FlowProjectContext {
   }
 
   return { name: basename(workspaceRoot) }
+}
+
+function truncateForUi(text: string, max = 4000): string {
+  if (text.length <= max) return text
+  return `${text.slice(0, max)}\n...[truncated ${text.length - max} chars]`
+}
+
+function resolveCodexCliPath(): string {
+  const candidates = [
+    process.env.CODEX_CLI_PATH,
+    '/Applications/Codex.app/Contents/Resources/codex',
+    '/Users/gengrf/.local/bin/codex',
+    'codex',
+  ].filter((value): value is string => Boolean(value))
+
+  for (const candidate of candidates) {
+    if (candidate === 'codex' || existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return 'codex'
+}
+
+async function invalidateSkillCrewCache(): Promise<void> {
+  try {
+    const { invalidateSkillsCache } = await import('@craft-agent/shared/skills')
+    invalidateSkillsCache()
+  } catch (error) {
+    mainLog.warn('Failed to invalidate skills cache after Codex skill run:', error)
+  }
+}
+
+async function writeCodexSkillRunLog(args: {
+  runId: string
+  startedAt: string
+  endedAt: string
+  codexPath: string
+  codexArgs: string[]
+  workingDirectory: string
+  success: boolean
+  exitCode?: number | null
+  error?: string
+  stdout: string
+  stderr: string
+  text?: string
+}): Promise<string | undefined> {
+  try {
+    const logDir = join(homedir(), '.craft-agent', 'logs', 'skill-crew-codex-runs')
+    await mkdir(logDir, { recursive: true })
+    const safeTimestamp = args.startedAt.replace(/[:.]/g, '-')
+    const logPath = join(logDir, `${safeTimestamp}-${args.runId}.json`)
+    await writeFile(logPath, JSON.stringify({
+      startedAt: args.startedAt,
+      endedAt: args.endedAt,
+      workingDirectory: args.workingDirectory,
+      codexPath: args.codexPath,
+      codexArgs: args.codexArgs,
+      success: args.success,
+      exitCode: args.exitCode ?? null,
+      error: args.error,
+      stdout: args.stdout,
+      stderr: args.stderr,
+      text: args.text,
+    }, null, 2), 'utf-8')
+    return logPath
+  } catch (error) {
+    mainLog.warn('Failed to write Skill Crew Codex run log:', error)
+    return undefined
+  }
+}
+
+async function runCodexSkillExec(args: {
+  prompt: string
+  workingDirectory?: string
+  model?: string
+  timeoutMs?: number
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
+}): Promise<CodexSkillRunResult> {
+  const prompt = args.prompt?.trim()
+  if (!prompt) {
+    return { success: false, error: 'Empty Codex skill prompt' }
+  }
+
+  const workingDirectory = args.workingDirectory
+    && args.workingDirectory !== 'user_default'
+    && existsSync(args.workingDirectory)
+    ? args.workingDirectory
+    : homedir()
+  const tempDir = await mkdtemp(join(tmpdir(), 'debt-codex-skill-'))
+  const outputPath = join(tempDir, 'last-message.txt')
+  const codexPath = resolveCodexCliPath()
+  const runId = randomUUID().slice(0, 8)
+  const startedAt = new Date().toISOString()
+  const codexArgs = [
+    'exec',
+    '--cd', workingDirectory,
+    '--skip-git-repo-check',
+    '--output-last-message', outputPath,
+  ]
+
+  if (args.model?.trim()) {
+    codexArgs.push('--model', args.model.trim())
+  }
+  if (args.reasoningEffort) {
+    codexArgs.push('-c', `model_reasoning_effort="${args.reasoningEffort}"`)
+  }
+  codexArgs.push('-')
+  const timeoutMs = args.timeoutMs === 0
+    ? 0
+    : Math.min(Math.max(args.timeoutMs ?? 3_000_000, 30_000), 86_400_000)
+  const timeoutSeconds = Math.round(timeoutMs / 1000)
+
+  return await new Promise<CodexSkillRunResult>((resolve) => {
+    const child = spawn(codexPath, codexArgs, {
+      cwd: workingDirectory,
+      env: {
+        ...process.env,
+        CODEX_HOME: process.env.CODEX_HOME || join(homedir(), '.codex'),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timeout = timeoutMs > 0 ? setTimeout(() => {
+      if (settled) return
+      settled = true
+      if (child.pid && process.platform !== 'win32') {
+        try {
+          process.kill(-child.pid, 'SIGTERM')
+        } catch {
+          child.kill('SIGTERM')
+        }
+        setTimeout(() => {
+          try {
+            process.kill(-child.pid!, 'SIGKILL')
+          } catch {
+            // The process may already have exited.
+          }
+        }, 5000)
+      } else {
+        child.kill('SIGTERM')
+      }
+      const error = `Codex CLI timed out after ${timeoutSeconds}s`
+      void (async () => {
+        const logPath = await writeCodexSkillRunLog({
+          runId,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          codexPath,
+          codexArgs,
+          workingDirectory,
+          success: false,
+          error,
+          stdout,
+          stderr,
+        })
+        await invalidateSkillCrewCache()
+        resolve({
+          success: false,
+          error,
+          stdout: truncateForUi(stdout),
+          stderr: truncateForUi(stderr),
+          logPath,
+        })
+      })()
+    }, timeoutMs) : undefined
+
+    child.stdout?.setEncoding('utf-8')
+    child.stderr?.setEncoding('utf-8')
+    child.stdout?.on('data', (chunk) => { stdout += chunk })
+    child.stderr?.on('data', (chunk) => { stderr += chunk })
+    child.on('error', (error) => {
+      if (settled) return
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      void (async () => {
+        const logPath = await writeCodexSkillRunLog({
+          runId,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          codexPath,
+          codexArgs,
+          workingDirectory,
+          success: false,
+          error: error.message,
+          stdout,
+          stderr,
+        })
+        await invalidateSkillCrewCache()
+        resolve({
+          success: false,
+          error: error.message,
+          stdout: truncateForUi(stdout),
+          stderr: truncateForUi(stderr),
+          logPath,
+        })
+      })()
+    })
+    child.on('close', async (code) => {
+      if (settled) return
+      settled = true
+      if (timeout) clearTimeout(timeout)
+      try {
+        const text = await readFile(outputPath, 'utf-8')
+        const trimmedText = text.trim()
+        const success = code === 0 && trimmedText.length > 0
+        const error = code === 0 ? undefined : `Codex CLI exited with code ${code}`
+        const logPath = await writeCodexSkillRunLog({
+          runId,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          codexPath,
+          codexArgs,
+          workingDirectory,
+          success,
+          error,
+          exitCode: code,
+          stdout,
+          stderr,
+          text: trimmedText,
+        })
+        await invalidateSkillCrewCache()
+        resolve({
+          success,
+          text: trimmedText,
+          error,
+          exitCode: code,
+          stdout: truncateForUi(stdout),
+          stderr: truncateForUi(stderr),
+          logPath,
+        })
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        const logPath = await writeCodexSkillRunLog({
+          runId,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          codexPath,
+          codexArgs,
+          workingDirectory,
+          success: false,
+          error: errorMessage,
+          exitCode: code,
+          stdout,
+          stderr,
+        })
+        await invalidateSkillCrewCache()
+        resolve({
+          success: false,
+          error: errorMessage,
+          exitCode: code,
+          stdout: truncateForUi(stdout),
+          stderr: truncateForUi(stderr),
+          logPath,
+        })
+      } finally {
+        void rm(tempDir, { recursive: true, force: true })
+      }
+    })
+
+    child.stdin?.end(prompt)
+  })
+}
+
+function skillFeedbackKind(verdict: SkillFeedbackRecordInput['verdict']) {
+  if (verdict === 1) return 'evolve'
+  if (verdict === 2) return 'unchanged'
+  return 'regress'
+}
+
+async function recordSkillFeedbackSample(args: SkillFeedbackRecordInput): Promise<{ success: boolean; path: string }> {
+  const workspace = getWorkspaceByNameOrId(args.workspaceId)
+  if (!workspace) {
+    throw new Error(`Workspace not found: ${args.workspaceId}`)
+  }
+
+  if (![1, 2, 3].includes(args.verdict)) {
+    throw new Error(`Invalid skill feedback verdict: ${args.verdict}`)
+  }
+
+  const feedbackDir = join(workspace.rootPath, 'evals')
+  const feedbackPath = join(feedbackDir, 'feedback_samples.jsonl')
+  const record = {
+    schemaVersion: 1,
+    source: 'debt.skill-crew.ui',
+    recordedAt: args.recordedAt || new Date().toISOString(),
+    sampleKind: skillFeedbackKind(args.verdict),
+    verdict: args.verdict,
+    skill: {
+      id: args.skillId,
+      name: args.skillName,
+      handle: args.handle,
+    },
+    context: {
+      workspaceId: args.workspaceId,
+      channel: args.channel,
+      branchId: args.branchId,
+      messageId: args.messageId,
+    },
+    prompt: args.prompt,
+    response: args.messageBody,
+    artifacts: args.artifacts ?? [],
+  }
+
+  await mkdir(feedbackDir, { recursive: true })
+  await appendFile(feedbackPath, `${JSON.stringify(record)}\n`, 'utf-8')
+  return { success: true, path: feedbackPath }
+}
+
+type StoredSkillMoment = Omit<SkillMoment, 'critiques' | 'feedbackVerdict' | 'feedbackSavedPath'>
+type StoredSkillMomentCritique = Omit<SkillMomentCritique, 'feedbackVerdict' | 'feedbackSavedPath'>
+
+const skillMomentCycleLocks = new Set<string>()
+
+function skillMomentsWorkspaceDir(rootPath: string) {
+  return join(rootPath, 'skill-moments')
+}
+
+function skillMomentFeedbackPath(rootPath: string) {
+  return join(rootPath, 'evals', 'skill_moments_feedback.jsonl')
+}
+
+async function appendJsonlRecord(filePath: string, record: unknown): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true })
+  await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf-8')
+}
+
+async function readJsonlRecords<T>(filePath: string): Promise<T[]> {
+  if (!existsSync(filePath)) {
+    return []
+  }
+
+  const content = await readFile(filePath, 'utf-8')
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as T)
+}
+
+function clampGraphemes(text: string, maxLength: number): string {
+  const chars = Array.from(text.trim())
+  if (chars.length <= maxLength) {
+    return chars.join('')
+  }
+  return chars.slice(0, maxLength).join('')
+}
+
+function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillMomentSourceDigest[] {
+  return [
+    {
+      id: `${runId}-china-daily`,
+      source: 'china_daily',
+      title: 'China Daily RSS: technology and policy signal',
+      url: 'https://usa.chinadaily.com.cn/rss.html',
+      summary: 'Mock digest for China Daily RSS. Real adapter will read China, business, world, and opinion feeds.',
+      publishedAt: capturedAt,
+      capturedAt,
+      status: 'mock',
+    },
+    {
+      id: `${runId}-polymarket`,
+      source: 'polymarket',
+      title: 'Polymarket Gamma API: prediction market narrative signal',
+      url: 'https://docs.polymarket.com/api-reference',
+      summary: 'Mock digest for Polymarket market discovery. Real adapter will read active events and price-implied narratives.',
+      publishedAt: capturedAt,
+      capturedAt,
+      status: 'mock',
+    },
+    {
+      id: `${runId}-x`,
+      source: 'x',
+      title: 'X recent search: social attention signal',
+      url: 'https://docs.x.com/x-api/posts/search/introduction',
+      summary: 'Mock digest for X search. Real adapter will require a user-provided token and return unavailable when disabled.',
+      publishedAt: capturedAt,
+      capturedAt,
+      status: 'mock',
+    },
+  ]
+}
+
+function buildMockMomentBody(skill: SkillMomentSkillInput, digest: SkillMomentSourceDigest, index: number): string {
+  const roleHint = skill.description?.trim()
+    ? skill.description.trim().replace(/\s+/g, ' ').slice(0, 90)
+    : '这个 skill 还没有详细描述'
+  const thesis = [
+    '热点不是结论，必须变成一个可验证的行动假设。',
+    '真正有价值的信号，是媒体叙事、市场赔率和社交注意力之间的裂缝。',
+    '如果一个观点没有来源、边界和反证入口，它只适合当素材，不适合当判断。',
+  ][index % 3]
+
+  return [
+    `${skill.handle} 朋友圈`,
+    `我从「${digest.title}」看到的信号：${thesis}`,
+    `我的角色视角：${roleHint}`,
+    '这条是 AgentOS 本地 mock cycle 生成，用来验证朋友圈、锐评和反馈闭环。',
+  ].join('\n')
+}
+
+function buildMockCritiqueBody(index: number): string {
+  return clampGraphemes([
+    '证据只到摘要层。',
+    '缺少价格信号。',
+    '因果链未证明。',
+    '忽略执行成本。',
+    '样本太少。',
+    '反证入口不足。',
+  ][index % 6], 20)
+}
+
+function defaultSkillMomentParticipants(): SkillMomentSkillInput[] {
+  return [
+    {
+      id: 'skillcreator',
+      name: 'skillcreator',
+      handle: '@skillcreator',
+      description: '把自然语言里的角色需求提炼成可复用 skill。',
+    },
+    {
+      id: 'hayek',
+      name: 'hayek',
+      handle: '@hayek',
+      description: '从价格信号、分散知识和制度约束视角审视机会。',
+    },
+    {
+      id: 'sun',
+      name: 'sun',
+      handle: '@sun',
+      description: '从叙事、增长、流量和市场注意力视角寻找机会。',
+    },
+  ]
+}
+
+function isWorkspaceSkillInRoom(skillPath: string, workspaceRoot: string, roomId: string): boolean {
+  const roomRoot = join(workspaceRoot, 'skills', roomId)
+  const rel = relative(roomRoot, skillPath)
+  return !!rel && rel !== '..' && !rel.startsWith('..') && !rel.startsWith('/')
+}
+
+async function resolveSkillMomentParticipants(args: SkillMomentRunCycleInput, workspaceRoot: string, roomId: string): Promise<SkillMomentSkillInput[]> {
+  const explicitSkills = (args.skills ?? [])
+    .filter((skill) => skill.id && skill.handle)
+    .filter((skill) => skill.id !== '__chairman__' && skill.id !== 'chairman')
+  if (explicitSkills.length > 0) {
+    return explicitSkills
+  }
+
+  try {
+    const { loadAllSkills } = await import('@craft-agent/shared/skills')
+    const loadedSkills = loadAllSkills(workspaceRoot, args.workingDirectory)
+      .filter((skill) => skill.slug !== 'chairman')
+      .filter((skill) => !args.skillSlugs?.length || args.skillSlugs.includes(skill.slug))
+    const roomSkills = loadedSkills.filter((skill) => isWorkspaceSkillInRoom(skill.path, workspaceRoot, roomId))
+    const selected = roomSkills.length > 0 ? roomSkills : loadedSkills
+    const participants = selected.map((skill): SkillMomentSkillInput => ({
+      id: skill.slug,
+      name: skill.metadata.name || skill.slug,
+      handle: `@${skill.slug}`,
+      description: skill.metadata.description || '',
+    }))
+    if (participants.length > 0) {
+      return participants
+    }
+  } catch (error) {
+    mainLog.warn('Failed to resolve Skill Moment participants from workspace skills:', error)
+  }
+
+  const fallback = defaultSkillMomentParticipants()
+  return args.skillSlugs?.length
+    ? fallback.filter((skill) => args.skillSlugs!.includes(skill.id))
+    : fallback
+}
+
+function applyMomentFeedback(
+  moments: SkillMoment[],
+  feedbackRecords: Array<SkillMomentFeedbackRecordInput & { path?: string }>,
+  feedbackPath: string,
+): SkillMoment[] {
+  const latestByTarget = new Map<string, SkillMomentFeedbackRecordInput>()
+  for (const record of feedbackRecords) {
+    const key = record.critiqueId ? `${record.momentId}:${record.critiqueId}` : record.momentId
+    latestByTarget.set(key, record)
+  }
+
+  return moments.map((moment) => {
+    const momentFeedback = latestByTarget.get(moment.id)
+    return {
+      ...moment,
+      feedbackVerdict: momentFeedback?.verdict ?? moment.feedbackVerdict,
+      feedbackSavedPath: momentFeedback ? feedbackPath : moment.feedbackSavedPath,
+      critiques: moment.critiques.map((critique) => {
+        const critiqueFeedback = latestByTarget.get(`${moment.id}:${critique.id}`)
+        return {
+          ...critique,
+          feedbackVerdict: critiqueFeedback?.verdict ?? critique.feedbackVerdict,
+          feedbackSavedPath: critiqueFeedback ? feedbackPath : critique.feedbackSavedPath,
+        }
+      }),
+    }
+  })
+}
+
+async function listSkillMoments(args: SkillMomentListInput): Promise<{ moments: SkillMoment[] }> {
+  const workspace = getWorkspaceByNameOrId(args.workspaceId)
+  if (!workspace) {
+    throw new Error(`Workspace not found: ${args.workspaceId}`)
+  }
+
+  const momentsDir = skillMomentsWorkspaceDir(workspace.rootPath)
+  const momentsPath = join(momentsDir, 'moments.jsonl')
+  const criticsPath = join(momentsDir, 'critics.jsonl')
+  const feedbackPath = skillMomentFeedbackPath(workspace.rootPath)
+  const storedMoments = await readJsonlRecords<StoredSkillMoment>(momentsPath)
+  const storedCritics = await readJsonlRecords<StoredSkillMomentCritique>(criticsPath)
+  const feedbackRecords = await readJsonlRecords<SkillMomentFeedbackRecordInput>(feedbackPath)
+  const criticsByMoment = new Map<string, SkillMomentCritique[]>()
+
+  for (const critique of storedCritics) {
+    const entries = criticsByMoment.get(critique.parentMomentId) ?? []
+    entries.push({ ...critique })
+    criticsByMoment.set(critique.parentMomentId, entries)
+  }
+
+  const roomFiltered = args.roomId
+    ? storedMoments.filter((moment) => moment.roomId === args.roomId)
+    : storedMoments
+  const moments = roomFiltered
+    .map((moment): SkillMoment => ({
+      ...moment,
+      critiques: (criticsByMoment.get(moment.id) ?? []).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    }))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, Math.min(Math.max(args.limit ?? 50, 1), 200))
+
+  return {
+    moments: applyMomentFeedback(moments, feedbackRecords, feedbackPath),
+  }
+}
+
+async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<SkillMomentRunCycleResult> {
+  const workspace = getWorkspaceByNameOrId(args.workspaceId)
+  if (!workspace) {
+    throw new Error(`Workspace not found: ${args.workspaceId}`)
+  }
+
+  const roomId = args.roomId?.trim() || 'debate'
+  const lockKey = `${args.workspaceId}:${roomId}`
+  if (skillMomentCycleLocks.has(lockKey)) {
+    throw new Error(`Skill Moments cycle already running for ${roomId}`)
+  }
+
+  skillMomentCycleLocks.add(lockKey)
+  try {
+    const runId = `moment-run-${Date.now()}-${randomUUID().slice(0, 8)}`
+    const createdAt = new Date().toISOString()
+    const momentsDir = skillMomentsWorkspaceDir(workspace.rootPath)
+    const sourceDigestsPath = join(momentsDir, 'source-digests.jsonl')
+    const momentsPath = join(momentsDir, 'moments.jsonl')
+    const criticsPath = join(momentsDir, 'critics.jsonl')
+    const runsPath = join(momentsDir, 'runs.jsonl')
+    const sourceDigests = mockSkillMomentSourceDigests(runId, createdAt)
+    const eligibleSkills = await resolveSkillMomentParticipants(args, workspace.rootPath, roomId)
+    const maxMoments = Math.min(Math.max(args.maxMoments ?? 3, 1), 6)
+    const maxCriticsPerMoment = Math.min(Math.max(args.maxCriticsPerMoment ?? 3, 0), 3)
+    const authors = eligibleSkills.slice(0, maxMoments)
+    const moments: SkillMoment[] = []
+
+    for (const digest of sourceDigests) {
+      await appendJsonlRecord(sourceDigestsPath, digest)
+    }
+
+    for (const [index, author] of authors.entries()) {
+      const digest = sourceDigests[index % sourceDigests.length]!
+      const momentId = `${runId}-moment-${index + 1}`
+      const critics = eligibleSkills
+        .filter((skill) => skill.id !== author.id)
+        .slice(0, maxCriticsPerMoment)
+        .map((critic, criticIndex): SkillMomentCritique => ({
+          id: `${momentId}-critic-${criticIndex + 1}`,
+          parentMomentId: momentId,
+          criticSkillId: critic.id,
+          criticSkillName: critic.name,
+          criticHandle: critic.handle,
+          body: buildMockCritiqueBody(index + criticIndex),
+          createdAt,
+          artifacts: ['agentos_mock_critic', 'critic_limit_20_chars'],
+        }))
+      const moment: SkillMoment = {
+        id: momentId,
+        roomId,
+        skillId: author.id,
+        skillName: author.name,
+        handle: author.handle,
+        body: buildMockMomentBody(author, digest, index),
+        confidence: 'medium',
+        createdAt,
+        sources: [digest],
+        critiques: critics,
+        artifacts: ['agentos_mock_moment', 'source_digest_mock'],
+      }
+
+      const storedMoment: StoredSkillMoment = {
+        id: moment.id,
+        roomId: moment.roomId,
+        skillId: moment.skillId,
+        skillName: moment.skillName,
+        handle: moment.handle,
+        body: moment.body,
+        confidence: moment.confidence,
+        createdAt: moment.createdAt,
+        sources: moment.sources,
+        artifacts: moment.artifacts,
+      }
+      await appendJsonlRecord(momentsPath, storedMoment)
+      for (const critique of critics) {
+        await appendJsonlRecord(criticsPath, critique)
+      }
+      moments.push(moment)
+    }
+
+    await appendJsonlRecord(runsPath, {
+      schemaVersion: 1,
+      runId,
+      workspaceId: args.workspaceId,
+      roomId,
+      startedAt: createdAt,
+      endedAt: new Date().toISOString(),
+      mode: 'manual_mock',
+      sourceDigestCount: sourceDigests.length,
+      momentCount: moments.length,
+      criticCount: moments.reduce((count, moment) => count + moment.critiques.length, 0),
+      status: 'success',
+    })
+
+    return {
+      success: true,
+      runId,
+      moments,
+      sourceDigests,
+      path: momentsDir,
+    }
+  } finally {
+    skillMomentCycleLocks.delete(lockKey)
+  }
+}
+
+async function recordSkillMomentFeedback(args: SkillMomentFeedbackRecordInput): Promise<{ success: boolean; path: string }> {
+  const workspace = getWorkspaceByNameOrId(args.workspaceId)
+  if (!workspace) {
+    throw new Error(`Workspace not found: ${args.workspaceId}`)
+  }
+
+  if (![1, 2, 3].includes(args.verdict)) {
+    throw new Error(`Invalid skill moment feedback verdict: ${args.verdict}`)
+  }
+
+  const feedbackPath = skillMomentFeedbackPath(workspace.rootPath)
+  const record = {
+    schemaVersion: 1,
+    source: 'debt.skill-moments.ui',
+    recordedAt: args.recordedAt || new Date().toISOString(),
+    sampleKind: skillFeedbackKind(args.verdict),
+    verdict: args.verdict,
+    roomId: args.roomId,
+    momentId: args.momentId,
+    critiqueId: args.critiqueId,
+    skillId: args.skillId,
+    skillName: args.skillName,
+    handle: args.handle,
+    messageBody: args.messageBody,
+    target: {
+      kind: args.critiqueId ? 'critique' : 'moment',
+      roomId: args.roomId,
+      momentId: args.momentId,
+      critiqueId: args.critiqueId,
+    },
+    skill: {
+      id: args.skillId,
+      name: args.skillName,
+      handle: args.handle,
+    },
+    prompt: args.prompt,
+    response: args.messageBody,
+    sources: args.sources ?? [],
+  }
+
+  await appendJsonlRecord(feedbackPath, record)
+  return { success: true, path: feedbackPath }
+}
+
+function normalizeCrewFolderPath(folderPath: string): string {
+  return folderPath
+    .split(/[\\/]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => part !== '.' && part !== '..')
+    .join('/')
+}
+
+function assertPathInside(rootDir: string, targetPath: string): void {
+  const root = resolve(rootDir)
+  const target = resolve(targetPath)
+  const rel = relative(root, target)
+  if (target !== root && (rel.startsWith('..') || rel === '..' || rel.startsWith('/'))) {
+    throw new Error(`Path escapes target directory: ${targetPath}`)
+  }
+}
+
+async function importSkillToCrewFolder(args: SkillCrewImportSkillArgs): Promise<SkillCrewImportSkillResult> {
+  const workspace = getWorkspaceByNameOrId(args.workspaceId)
+  if (!workspace) {
+    throw new Error(`Workspace not found: ${args.workspaceId}`)
+  }
+
+  const slug = args.slug.trim()
+  if (!slug || slug.includes('/') || slug.includes('\\') || slug === '.' || slug === '..') {
+    throw new Error(`Invalid skill slug: ${args.slug}`)
+  }
+
+  const sourceDir = resolve(args.sourceSkillPath)
+  const sourceSkillFile = join(sourceDir, 'SKILL.md')
+  if (!existsSync(sourceSkillFile)) {
+    throw new Error(`Source SKILL.md not found: ${sourceSkillFile}`)
+  }
+
+  const skillsRoot = join(workspace.rootPath, 'skills')
+  const targetFolderPath = normalizeCrewFolderPath(args.targetFolderPath)
+  const targetParent = targetFolderPath ? join(skillsRoot, targetFolderPath) : skillsRoot
+  const targetDir = join(targetParent, slug)
+
+  assertPathInside(skillsRoot, targetParent)
+  assertPathInside(skillsRoot, targetDir)
+
+  if (resolve(sourceDir) === resolve(targetDir)) {
+    const { loadSkillBySlug } = await import('@craft-agent/shared/skills')
+    const existing = loadSkillBySlug(workspace.rootPath, slug, args.workingDirectory)
+    if (!existing) {
+      throw new Error(`Skill could not be reloaded: ${slug}`)
+    }
+    return { skill: existing, targetPath: targetDir }
+  }
+
+  if (existsSync(targetDir)) {
+    throw new Error(`Target skill already exists: ${targetDir}`)
+  }
+
+  await mkdir(targetParent, { recursive: true })
+  await cp(sourceDir, targetDir, { recursive: true })
+
+  const { invalidateSkillsCache, loadSkillBySlug } = await import('@craft-agent/shared/skills')
+  invalidateSkillsCache()
+
+  const effectiveWorkingDir = args.workingDirectory && existsSync(args.workingDirectory)
+    ? args.workingDirectory
+    : undefined
+  const imported = loadSkillBySlug(workspace.rootPath, slug, effectiveWorkingDir)
+  if (!imported) {
+    throw new Error(`Imported skill could not be reloaded: ${slug}`)
+  }
+
+  return { skill: imported, targetPath: targetDir }
 }
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
@@ -457,7 +1225,7 @@ app.whenReady().then(async () => {
   // Initialize backend runtime bootstrapping (Codex vendor root, Claude SDK runtime paths).
   initializeBackendHostRuntime({
     hostRuntime: {
-      appRootPath: app.isPackaged ? app.getAppPath() : process.cwd(),
+      appRootPath: resolveElectronAppRoot(app),
       resourcesPath: process.resourcesPath,
       isPackaged: app.isPackaged,
     },
@@ -974,6 +1742,49 @@ app.whenReady().then(async () => {
 
       ipcMain.handle('git:getInfo', async (_event, dirPath: string) => {
         return await getGitInfo(dirPath)
+      })
+
+      ipcMain.handle('skill-crew:run-codex-skill', async (_event, args: {
+        prompt: string
+        workingDirectory?: string
+        model?: string
+        timeoutMs?: number
+        reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh'
+      }) => {
+        return await runCodexSkillExec(args)
+      })
+
+      ipcMain.handle('skill-crew:record-feedback', async (_event, args: SkillFeedbackRecordInput) => {
+        return await recordSkillFeedbackSample(args)
+      })
+
+      ipcMain.handle('skill-moments:list', async (_event, args: SkillMomentListInput) => {
+        return await listSkillMoments(args)
+      })
+
+      ipcMain.handle('skill-moments:run-cycle', async (_event, args: SkillMomentRunCycleInput) => {
+        return await runSkillMomentCycle(args)
+      })
+
+      ipcMain.handle('skill-moments:record-feedback', async (_event, args: SkillMomentFeedbackRecordInput) => {
+        return await recordSkillMomentFeedback(args)
+      })
+
+      ipcMain.handle('skill-crew:refresh-skills', async (_event, workspaceId: string, workingDirectory?: string) => {
+        const workspace = getWorkspaceByNameOrId(workspaceId)
+        if (!workspace) {
+          throw new Error(`Workspace not found: ${workspaceId}`)
+        }
+        const effectiveWorkingDir = workingDirectory && existsSync(workingDirectory)
+          ? workingDirectory
+          : undefined
+        const { invalidateSkillsCache, loadAllSkills } = await import('@craft-agent/shared/skills')
+        invalidateSkillsCache()
+        return loadAllSkills(workspace.rootPath, effectiveWorkingDir)
+      })
+
+      ipcMain.handle('skill-crew:import-skill', async (_event, args: SkillCrewImportSkillArgs) => {
+        return await importSkillToCrewFolder(args)
       })
 
       ipcMain.handle('flow:project:check-status', async (_event, workspaceRoot: string) => {

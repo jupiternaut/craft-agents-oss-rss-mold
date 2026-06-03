@@ -427,6 +427,14 @@ client.onConnectionStateChanged((state) => {
 // Flow-next task planning — direct IPC because this is a local filesystem UI.
 ;(api as ElectronAPI).getGitRoot = (dirPath: string) => ipcRenderer.invoke('git:getRoot', dirPath)
 ;(api as ElectronAPI).getGitInfo = (dirPath: string) => ipcRenderer.invoke('git:getInfo', dirPath)
+;(api as ElectronAPI).runCodexSkill = (args) => ipcRenderer.invoke('skill-crew:run-codex-skill', args)
+;(api as ElectronAPI).recordSkillFeedback = (args) => ipcRenderer.invoke('skill-crew:record-feedback', args)
+;(api as ElectronAPI).listSkillMoments = (args) => ipcRenderer.invoke('skill-moments:list', args)
+;(api as ElectronAPI).runSkillMomentCycle = (args) => ipcRenderer.invoke('skill-moments:run-cycle', args)
+;(api as ElectronAPI).recordSkillMomentFeedback = (args) => ipcRenderer.invoke('skill-moments:record-feedback', args)
+;(api as ElectronAPI).refreshSkillCrewSkills = (workspaceId, workingDirectory) =>
+  ipcRenderer.invoke('skill-crew:refresh-skills', workspaceId, workingDirectory)
+;(api as ElectronAPI).importSkillToCrewFolder = (args) => ipcRenderer.invoke('skill-crew:import-skill', args)
 ;(api as ElectronAPI).flowProjectCheckStatus = (workspaceRoot: string) => ipcRenderer.invoke('flow:project:check-status', workspaceRoot)
 ;(api as ElectronAPI).flowProjectRegister = (workspaceRoot: string, workspaceId?: string) => ipcRenderer.invoke('flow:project:register', workspaceRoot, workspaceId)
 ;(api as ElectronAPI).flowProjectUnregister = (workspaceRoot: string) => ipcRenderer.invoke('flow:project:unregister', workspaceRoot)

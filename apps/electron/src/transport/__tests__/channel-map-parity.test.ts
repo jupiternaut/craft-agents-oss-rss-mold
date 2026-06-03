@@ -30,6 +30,13 @@ type ApiToChannelMapKeys = Exclude<
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
   | 'getGitRoot' // direct IPC to main process — local git helper
   | 'getGitInfo' // direct IPC to main process — local git helper
+  | 'runCodexSkill' // direct IPC to main process — local Codex CLI OAuth skill runner
+  | 'recordSkillFeedback' // direct IPC to main process — local Skill Crew feedback sample writer
+  | 'listSkillMoments' // direct IPC to main process — local Skill Moments JSONL reader
+  | 'runSkillMomentCycle' // direct IPC to main process — local AgentOS mock cycle runner
+  | 'recordSkillMomentFeedback' // direct IPC to main process — local Skill Moments feedback sample writer
+  | 'refreshSkillCrewSkills' // direct IPC to main process — cache-bypassing Skill Crew filesystem refresh
+  | 'importSkillToCrewFolder' // direct IPC to main process — copies installed skills into a Crew room folder
   | 'flowProjectCheckStatus' // direct IPC to main process — local filesystem flow-next bridge
   | 'flowProjectRegister'
   | 'flowProjectUnregister'
