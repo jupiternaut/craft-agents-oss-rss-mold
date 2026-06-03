@@ -83,6 +83,7 @@ type ComposerFrame = {
 }
 
 const SKILL_CREW_CONVERSATION_STORAGE_PREFIX = 'debt.skillCrew.conversation.v1'
+const SKILL_SILENCE_MARKER = '<SILENCE/>'
 
 const skillFeedbackOptions: Array<{
   verdict: SkillFeedbackVerdict
@@ -100,6 +101,19 @@ function skillFeedbackLabel(verdict?: SkillFeedbackVerdict) {
 
 function estimateTokens(text: string) {
   return Math.max(1, Math.ceil(text.length / 3))
+}
+
+function normalizeSkillReplyText(text: string) {
+  return text
+    .trim()
+    .replace(/^```(?:text|plain)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+}
+
+function isSkillSilenceReply(text: string) {
+  const normalized = normalizeSkillReplyText(text)
+  return normalized === SKILL_SILENCE_MARKER || normalized === 'SILENCE'
 }
 
 function formatCompactNumber(value: number) {
@@ -542,6 +556,8 @@ function buildSkillInvocationPrompt({
     '',
     '执行要求:',
     '- 直接完成请求，不要只复述你的角色边界。',
+    '- 像聊天室里的路人角色一样发言：先接住当前语境，再提出你这个 skill 真正在意的一个问题；不要输出空泛评审句。',
+    `- 先做沉默阈值判断：如果你的发言不能增加新问题、新证据、新行动、新角色冲突或明确执行结果，请只输出 \`${SKILL_SILENCE_MARKER}\`，不要解释。`,
     '- 如果 SKILL.md 引用 references/、agents/、evals/ 或 scripts/，请按完整 skill 目录路径读取相对文件。',
     '- 如果需要搜索、读文件或写文件，但当前权限/上下文不足，请明确说明缺什么。',
     '- 如果执行文件写入，默认只改当前工作区 skills 目录或用户明确指定的路径。',
@@ -580,6 +596,7 @@ function buildModelSelfInvocationPrompt({
 
 export default function SkillCrewPage() {
   const { activeWorkspaceId, activeSessionWorkingDirectory } = useAppShellContext()
+  const avatarWorkspaceId = activeWorkspaceId ?? undefined
   const skills = useAtomValue(skillsAtom)
   const setSkills = useSetAtom(skillsAtom)
   const activeChannel = useAtomValue(skillCrewChannelAtom)
@@ -745,6 +762,17 @@ export default function SkillCrewPage() {
     )))
   }, [])
 
+  const removeMessageInBranch = React.useCallback((branchId: string, messageId: string) => {
+    setBranches((prev) => prev.map((branch) => (
+      branch.id === branchId
+        ? {
+          ...branch,
+          messages: branch.messages.filter((message) => message.id !== messageId),
+        }
+        : branch
+    )))
+  }, [])
+
   const refreshSkills = React.useCallback(async () => {
     if (!activeWorkspaceId) {
       return
@@ -793,7 +821,7 @@ export default function SkillCrewPage() {
     }
 
     const cycleRoles = mentionableRoles
-      .filter((role) => !role.chairman)
+      .filter((role) => !role.chairman && role.id !== 'skillcreator' && role.id !== 'hafuke')
       .slice(0, 8)
 
     setSkillMomentsRunning(true)
@@ -996,10 +1024,16 @@ export default function SkillCrewPage() {
       await refreshSkills()
 
       if (result.success && result.text?.trim()) {
+        const replyText = result.text.trim()
+        if (isSkillSilenceReply(replyText)) {
+          removeMessageInBranch(branchId, messageId)
+          return
+        }
+
         const runEndedAt = Date.now()
         updateMessageInBranch(branchId, messageId, (message) => ({
           ...message,
-          body: result.text!.trim(),
+          body: normalizeSkillReplyText(replyText),
           artifacts: ['codex_oauth_reply', 'skill_reply'],
           runEndedAt,
           elapsedMs: runEndedAt - runStartedAt,
@@ -1026,7 +1060,7 @@ export default function SkillCrewPage() {
         artifacts: ['skill_error', 'skill_fallback', 'codex_oauth_error'],
       }))
     }
-  }, [activeChannel, activeSessionWorkingDirectory, activeWorkspaceId, refreshSkills, resolveSkillContent, updateMessageInBranch])
+  }, [activeChannel, activeSessionWorkingDirectory, activeWorkspaceId, refreshSkills, removeMessageInBranch, resolveSkillContent, updateMessageInBranch])
 
   const runModelSelfWithCodex = React.useCallback(async ({
     prompt,
@@ -1457,7 +1491,7 @@ export default function SkillCrewPage() {
                 )
                 return (
                   <article key={message.id} className="group flex gap-3">
-                    <Avatar message={message} roles={roles} />
+                    <Avatar message={message} roles={roles} workspaceId={avatarWorkspaceId} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
                         <span className="text-sm font-semibold text-foreground">{message.author}</span>
@@ -1685,6 +1719,7 @@ export default function SkillCrewPage() {
           ) : (
             <SkillMomentsView
               mode={activeCrewSurface}
+              workspaceId={avatarWorkspaceId}
               roomLabel={formatChannelLabel(activeChannel)}
               moments={skillMoments}
               roles={roles}
@@ -1721,7 +1756,7 @@ export default function SkillCrewPage() {
                 {mentionableRoles.map((role) => (
                   <div key={role.id} className="flex items-center gap-2 rounded-[7px] px-2 py-1.5">
                     {role.skill ? (
-                      <SkillAvatar skill={role.skill} size="sm" />
+                      <SkillAvatar skill={role.skill} size="sm" className="h-8 w-8" workspaceId={avatarWorkspaceId} />
                     ) : (
                       <span className={cn(
                         'flex h-7 w-7 items-center justify-center rounded-[7px]',
@@ -1767,7 +1802,7 @@ function MessageActionButton({
   )
 }
 
-function Avatar({ message, roles }: { message: CrewMessage; roles: CrewRole[] }) {
+function Avatar({ message, roles, workspaceId }: { message: CrewMessage; roles: CrewRole[]; workspaceId?: string }) {
   if (message.role === 'user') {
     return (
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-foreground text-background text-xs font-semibold">
@@ -1778,7 +1813,7 @@ function Avatar({ message, roles }: { message: CrewMessage; roles: CrewRole[] })
 
   const role = roles.find((entry) => entry.name === message.author || entry.handle === message.handle)
   if (role?.skill) {
-    return <SkillAvatar skill={role.skill} size="md" className="shrink-0" />
+    return <SkillAvatar skill={role.skill} size="md" className="h-10 w-10 shrink-0" workspaceId={workspaceId} />
   }
 
   return (

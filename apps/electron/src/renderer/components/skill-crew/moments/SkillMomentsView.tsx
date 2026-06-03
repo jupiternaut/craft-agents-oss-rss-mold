@@ -14,6 +14,7 @@ import type {
 
 type SkillMomentsViewProps = {
   mode: 'moments' | 'agentos'
+  workspaceId?: string
   roomLabel: string
   moments: SkillMoment[]
   roles: SkillMomentRole[]
@@ -27,6 +28,7 @@ type SkillMomentsViewProps = {
 
 export function SkillMomentsView({
   mode,
+  workspaceId,
   roomLabel,
   moments,
   roles,
@@ -79,6 +81,7 @@ export function SkillMomentsView({
               {moments.map((moment) => (
                 <MomentCard
                   key={moment.id}
+                  workspaceId={workspaceId}
                   moment={moment}
                   roles={roles}
                   pendingFeedbackKey={pendingFeedbackKey}

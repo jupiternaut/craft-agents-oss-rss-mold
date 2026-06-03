@@ -642,6 +642,65 @@ function clampGraphemes(text: string, maxLength: number): string {
   return chars.slice(0, maxLength).join('')
 }
 
+function normalizeSkillMomentSlug(skill: Pick<SkillMomentSkillInput, 'id' | 'name' | 'handle'>): string {
+  const raw = skill.handle?.replace(/^@/, '') || skill.id || skill.name
+  return raw.trim().toLocaleLowerCase()
+}
+
+function orderSkillMomentParticipants(skills: SkillMomentSkillInput[], roomId: string): SkillMomentSkillInput[] {
+  if (roomId !== 'debate') {
+    return skills
+  }
+
+  const priority = new Map([
+    ['homelander', 0],
+    ['butcher', 1],
+  ])
+
+  return skills
+    .map((skill, index) => ({ skill, index }))
+    .sort((left, right) => {
+      const leftPriority = priority.get(normalizeSkillMomentSlug(left.skill)) ?? Number.MAX_SAFE_INTEGER
+      const rightPriority = priority.get(normalizeSkillMomentSlug(right.skill)) ?? Number.MAX_SAFE_INTEGER
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority
+      }
+      return left.index - right.index
+    })
+    .map(({ skill }) => skill)
+}
+
+const AUTO_MOMENT_EXCLUDED_SKILL_SLUGS = new Set(['skillcreator', 'chairman', '__chairman__', 'hafuke'])
+
+function shouldAutoIncludeSkillMomentParticipant(skill: SkillMomentSkillInput): boolean {
+  return !AUTO_MOMENT_EXCLUDED_SKILL_SLUGS.has(normalizeSkillMomentSlug(skill))
+}
+
+function orderSkillMomentCritics(author: SkillMomentSkillInput, critics: SkillMomentSkillInput[]): SkillMomentSkillInput[] {
+  const authorSlug = normalizeSkillMomentSlug(author)
+  const targetSlug = authorSlug === 'homelander'
+    ? 'butcher'
+    : authorSlug === 'butcher'
+      ? 'homelander'
+      : null
+
+  if (!targetSlug) {
+    return critics
+  }
+
+  return critics
+    .map((skill, index) => ({ skill, index }))
+    .sort((left, right) => {
+      const leftPriority = normalizeSkillMomentSlug(left.skill) === targetSlug ? 0 : 1
+      const rightPriority = normalizeSkillMomentSlug(right.skill) === targetSlug ? 0 : 1
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority
+      }
+      return left.index - right.index
+    })
+    .map(({ skill }) => skill)
+}
+
 function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillMomentSourceDigest[] {
   return [
     {
@@ -678,9 +737,31 @@ function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillM
 }
 
 function buildMockMomentBody(skill: SkillMomentSkillInput, digest: SkillMomentSourceDigest, index: number): string {
-  const roleHint = skill.description?.trim()
-    ? skill.description.trim().replace(/\s+/g, ' ').slice(0, 90)
-    : '这个 skill 还没有详细描述'
+  const skillSlug = normalizeSkillMomentSlug(skill)
+  if (skillSlug === 'homelander') {
+    return [
+      '孩子们，我复活了。',
+      '别怕，我回来了。你们需要的不是更多解释，是一个能让所有人抬头看的名字。',
+      '把灯打开，把镜头给我。只要你们还相信我，世界就不会散。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'butcher') {
+    return [
+      `${skill.handle} 朋友圈`,
+      '那位披风先生又开始演救世主了。',
+      '别被第一句骗了。真复活的人先还账，装神的人只会找镜头。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'chomsky') {
+    return [
+      `${skill.handle} 朋友圈`,
+      `我读到「${digest.title}」。先别急着追热点，先问这套话是谁写的、谁反复播放、谁因此保持沉默。`,
+      '如果答案只剩一个口号，那不是解释，是宣传。',
+    ].join('\n')
+  }
+
   const thesis = [
     '热点不是结论，必须变成一个可验证的行动假设。',
     '真正有价值的信号，是媒体叙事、市场赔率和社交注意力之间的裂缝。',
@@ -689,31 +770,138 @@ function buildMockMomentBody(skill: SkillMomentSkillInput, digest: SkillMomentSo
 
   return [
     `${skill.handle} 朋友圈`,
-    `我从「${digest.title}」看到的信号：${thesis}`,
-    `我的角色视角：${roleHint}`,
-    '这条是 AgentOS 本地 mock cycle 生成，用来验证朋友圈、锐评和反馈闭环。',
+    `我读到「${digest.title}」后的判断：${thesis}`,
+    '我先把它当成一个待验证的问题，不当结论。',
+    '先放这里，等你们挑刺。',
   ].join('\n')
 }
 
-function buildMockCritiqueBody(index: number): string {
-  return clampGraphemes([
+function buildMockCritiqueBody(author: SkillMomentSkillInput, critic: SkillMomentSkillInput, index: number): string {
+  const authorSlug = normalizeSkillMomentSlug(author)
+  const criticSlug = normalizeSkillMomentSlug(critic)
+
+  if (authorSlug === 'homelander' && criticSlug === 'butcher') {
+    return clampGraphemes('披风下面全是烂账。', 20)
+  }
+
+  if (authorSlug === 'butcher' && criticSlug === 'homelander') {
+    return clampGraphemes('你只会嫉妒神。', 20)
+  }
+
+  if (criticSlug === 'homelander') {
+    return clampGraphemes('孩子，掌声会给答案。', 20)
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'chomsky') {
+    return clampGraphemes('这个叙事还要证据。', 20)
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'hayek') {
+    return clampGraphemes('我保留一点制度疑问。', 20)
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'sun') {
+    return clampGraphemes('很有流量，但要落地。', 20)
+  }
+
+  if (authorSlug === 'homelander') {
+    return clampGraphemes('我先保留一点疑问。', 20)
+  }
+
+  if (criticSlug === 'chomsky') {
+    return clampGraphemes('谁掌权，先说清。', 20)
+  }
+
+  const authorQuestions: Record<string, string[]> = {
+    butcher: [
+      '你手里有账本吗？',
+      '先查谁的钱？',
+      '别只骂，证据呢？',
+    ],
+    chomsky: [
+      '谁在播这套话？',
+      '沉默的人是谁？',
+      '这口号谁受益？',
+    ],
+  }
+  const questions = authorQuestions[authorSlug] ?? [
+    '所以下一步查啥？',
+    '这事谁会买单？',
+    '有没有反例？',
+    '谁最怕这结论？',
+    '用户会怎么用？',
+    '这能落地吗？',
+  ]
+  return clampGraphemes(questions[index % questions.length]!, 20)
+}
+
+function shouldKeepSkillMoment(author: SkillMomentSkillInput, body: string): boolean {
+  const text = body.trim()
+  const chars = Array.from(text).length
+  if (chars < 20) {
+    return false
+  }
+
+  const authorSlug = normalizeSkillMomentSlug(author)
+  if (authorSlug === 'homelander') {
+    return text.includes('孩子们，我复活了。') && text.includes('需要')
+  }
+
+  return !text.includes('AgentOS 本地 mock') && !text.includes('这条是 AgentOS')
+}
+
+function shouldAttachSkillMomentSource(author: SkillMomentSkillInput): boolean {
+  const authorSlug = normalizeSkillMomentSlug(author)
+  return authorSlug !== 'homelander' && authorSlug !== 'butcher'
+}
+
+function shouldKeepSkillMomentCritique(
+  author: SkillMomentSkillInput,
+  critic: SkillMomentSkillInput,
+  body: string,
+): boolean {
+  const text = body.trim()
+  if (!text) {
+    return false
+  }
+
+  const oldGenericTemplates = new Set([
     '证据只到摘要层。',
     '缺少价格信号。',
     '因果链未证明。',
     '忽略执行成本。',
     '样本太少。',
     '反证入口不足。',
-  ][index % 6], 20)
+  ])
+  if (oldGenericTemplates.has(text)) {
+    return false
+  }
+
+  const chars = Array.from(text).length
+  if (chars < 5 || chars > 20) {
+    return false
+  }
+
+  const authorSlug = normalizeSkillMomentSlug(author)
+  const criticSlug = normalizeSkillMomentSlug(critic)
+  if (authorSlug === 'homelander' && criticSlug === 'butcher') {
+    return true
+  }
+  if (criticSlug === 'homelander') {
+    return text.includes('掌声') || text.includes('神')
+  }
+
+  return (
+    text.includes('？')
+    || text.includes('?')
+    || text.includes('保留')
+    || text.includes('证据')
+    || text.includes('账')
+  )
 }
 
 function defaultSkillMomentParticipants(): SkillMomentSkillInput[] {
   return [
-    {
-      id: 'skillcreator',
-      name: 'skillcreator',
-      handle: '@skillcreator',
-      description: '把自然语言里的角色需求提炼成可复用 skill。',
-    },
     {
       id: 'hayek',
       name: 'hayek',
@@ -857,7 +1045,11 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
     const criticsPath = join(momentsDir, 'critics.jsonl')
     const runsPath = join(momentsDir, 'runs.jsonl')
     const sourceDigests = mockSkillMomentSourceDigests(runId, createdAt)
-    const eligibleSkills = await resolveSkillMomentParticipants(args, workspace.rootPath, roomId)
+    const eligibleSkills = orderSkillMomentParticipants(
+      (await resolveSkillMomentParticipants(args, workspace.rootPath, roomId))
+        .filter(shouldAutoIncludeSkillMomentParticipant),
+      roomId,
+    )
     const maxMoments = Math.min(Math.max(args.maxMoments ?? 3, 1), 6)
     const maxCriticsPerMoment = Math.min(Math.max(args.maxCriticsPerMoment ?? 3, 0), 3)
     const authors = eligibleSkills.slice(0, maxMoments)
@@ -870,31 +1062,48 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
     for (const [index, author] of authors.entries()) {
       const digest = sourceDigests[index % sourceDigests.length]!
       const momentId = `${runId}-moment-${index + 1}`
-      const critics = eligibleSkills
-        .filter((skill) => skill.id !== author.id)
+      const body = buildMockMomentBody(author, digest, index)
+      if (!shouldKeepSkillMoment(author, body)) {
+        continue
+      }
+      const critics = orderSkillMomentCritics(
+        author,
+        eligibleSkills.filter((skill) => skill.id !== author.id),
+      )
         .slice(0, maxCriticsPerMoment)
-        .map((critic, criticIndex): SkillMomentCritique => ({
-          id: `${momentId}-critic-${criticIndex + 1}`,
-          parentMomentId: momentId,
-          criticSkillId: critic.id,
-          criticSkillName: critic.name,
-          criticHandle: critic.handle,
-          body: buildMockCritiqueBody(index + criticIndex),
-          createdAt,
-          artifacts: ['agentos_mock_critic', 'critic_limit_20_chars'],
-        }))
+        .flatMap((critic, criticIndex): SkillMomentCritique[] => {
+          const critiqueBody = buildMockCritiqueBody(author, critic, index + criticIndex)
+          if (!shouldKeepSkillMomentCritique(author, critic, critiqueBody)) {
+            return []
+          }
+
+          return [{
+            id: `${momentId}-critic-${criticIndex + 1}`,
+            parentMomentId: momentId,
+            criticSkillId: critic.id,
+            criticSkillName: critic.name,
+            criticHandle: critic.handle,
+            body: critiqueBody,
+            createdAt,
+            artifacts: ['agentos_mock_critic', 'critic_limit_20_chars'],
+          }]
+        })
+      const sources = shouldAttachSkillMomentSource(author) ? [digest] : []
       const moment: SkillMoment = {
         id: momentId,
         roomId,
         skillId: author.id,
         skillName: author.name,
         handle: author.handle,
-        body: buildMockMomentBody(author, digest, index),
+        body,
         confidence: 'medium',
         createdAt,
-        sources: [digest],
+        sources,
         critiques: critics,
-        artifacts: ['agentos_mock_moment', 'source_digest_mock'],
+        artifacts: [
+          'agentos_mock_moment',
+          sources.length > 0 ? 'source_digest_mock' : 'persona_scene_moment',
+        ],
       }
 
       const storedMoment: StoredSkillMoment = {

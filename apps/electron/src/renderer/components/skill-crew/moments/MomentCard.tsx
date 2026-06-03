@@ -18,6 +18,7 @@ import {
 } from './types'
 
 type MomentCardProps = {
+  workspaceId?: string
   moment: SkillMoment
   roles: SkillMomentRole[]
   pendingFeedbackKey?: string
@@ -25,6 +26,7 @@ type MomentCardProps = {
 }
 
 export function MomentCard({
+  workspaceId,
   moment,
   roles,
   pendingFeedbackKey,
@@ -35,12 +37,12 @@ export function MomentCard({
   const momentTargetKey = feedbackTargetKey(momentTarget)
 
   return (
-    <article className="flex gap-3 border-b border-border/60 py-5 last:border-b-0">
+    <article className="flex gap-4 border-b border-border/60 py-5 last:border-b-0">
       {role?.skill ? (
-        <SkillAvatar skill={role.skill} size="md" className="shrink-0" />
+        <SkillAvatar skill={role.skill} size="md" className="h-10 w-10 shrink-0" workspaceId={workspaceId} />
       ) : (
-        <span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-foreground/[0.06] text-muted-foreground">
-          <Bot className="size-4" />
+        <span className="grid size-10 shrink-0 place-items-center rounded-[8px] bg-foreground/[0.06] text-muted-foreground">
+          <Bot className="size-5" />
         </span>
       )}
       <div className="min-w-0 flex-1">
@@ -122,6 +124,7 @@ export function MomentCard({
             {moment.critiques.map((critique) => (
               <MomentCritiqueRow
                 key={critique.id}
+                workspaceId={workspaceId}
                 target={{ kind: 'critique', moment, critique }}
                 roles={roles}
                 pendingFeedbackKey={pendingFeedbackKey}

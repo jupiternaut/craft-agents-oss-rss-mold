@@ -14,6 +14,7 @@ import {
 } from './types'
 
 type MomentCritiqueRowProps = {
+  workspaceId?: string
   target: Extract<SkillMomentFeedbackTarget, { kind: 'critique' }>
   roles: SkillMomentRole[]
   pendingFeedbackKey?: string
@@ -21,6 +22,7 @@ type MomentCritiqueRowProps = {
 }
 
 export function MomentCritiqueRow({
+  workspaceId,
   target,
   roles,
   pendingFeedbackKey,
@@ -31,12 +33,12 @@ export function MomentCritiqueRow({
   const targetKey = feedbackTargetKey(target)
 
   return (
-    <div className="flex gap-2 rounded-[7px] bg-foreground/[0.035] px-2 py-2">
+    <div className="flex gap-3 rounded-[7px] bg-foreground/[0.035] px-2 py-2">
       {role?.skill ? (
-        <SkillAvatar skill={role.skill} size="sm" className="shrink-0" />
+        <SkillAvatar skill={role.skill} size="sm" className="h-8 w-8 shrink-0" workspaceId={workspaceId} />
       ) : (
-        <span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-foreground/[0.06] text-muted-foreground">
-          <Bot className="size-3.5" />
+        <span className="grid size-8 shrink-0 place-items-center rounded-[7px] bg-foreground/[0.06] text-muted-foreground">
+          <Bot className="size-4" />
         </span>
       )}
       <div className="min-w-0 flex-1">
