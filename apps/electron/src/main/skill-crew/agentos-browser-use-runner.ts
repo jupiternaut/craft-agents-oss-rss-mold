@@ -46,6 +46,27 @@ type BraveCdpTarget = {
   webSocketDebuggerUrl?: string
 }
 
+type RuntimeEvaluateResult<T> = {
+  result?: { value?: T }
+  exceptionDetails?: {
+    text?: string
+    exception?: {
+      description?: string
+      value?: unknown
+    }
+  }
+}
+
+type ChatGptPromptState = {
+  url: string
+  title: string
+  hasPrompt: boolean
+  visiblePrompt: boolean
+  inputTextLength: number
+  promptSelector?: string
+  diagnostics: string
+}
+
 type CdpImageRect = {
   x: number
   y: number
@@ -61,6 +82,29 @@ type CdpImageDownload = {
   naturalWidth: number
   naturalHeight: number
 }
+
+const CHATGPT_PROMPT_INPUT_SELECTORS = [
+  '#prompt-textarea',
+  '[data-testid="prompt-textarea"]',
+  '[data-testid="composer-input"]',
+  '[data-testid="composer"] [contenteditable="true"]',
+  '.ProseMirror[contenteditable="true"]',
+  '[contenteditable="true"][role="textbox"]',
+  '[contenteditable="true"][data-placeholder]',
+  '[contenteditable="plaintext-only"]',
+  'main [contenteditable="true"]',
+  'textarea[aria-label*="Chat"]',
+  'textarea[aria-label*="Message"]',
+  'textarea[placeholder*="Message"]',
+  'textarea',
+]
+
+const CHATGPT_SEND_BUTTON_SELECTORS = [
+  '[data-testid="send-button"]',
+  '#composer-submit-button',
+  'button[aria-label*="Send"]',
+  'button[data-testid*="send"]',
+]
 
 function quoteAppleScriptString(value: string): string {
   return `"${value
@@ -303,6 +347,16 @@ async function cdpSend<T>(
   })
 }
 
+function readRuntimeEvaluateValue<T>(evaluation: RuntimeEvaluateResult<T> | undefined): T | undefined {
+  if (evaluation?.exceptionDetails) {
+    const exception = evaluation.exceptionDetails.exception
+    const message = exception?.description || String(exception?.value || evaluation.exceptionDetails.text || 'ChatGPT page script failed')
+    throw new Error(message.replace(/\s+/g, ' ').slice(0, 500))
+  }
+
+  return evaluation?.result?.value
+}
+
 async function withCdpTarget<T>(target: BraveCdpTarget, fn: (socket: WebSocket, idCounter: { value: number }) => Promise<T>): Promise<T> {
   if (!target.webSocketDebuggerUrl) {
     throw new Error('Brave CDP target has no websocket debugger URL')
@@ -340,19 +394,114 @@ async function openBraveCdpTarget(port: number, url: string): Promise<BraveCdpTa
   return await response.json() as BraveCdpTarget
 }
 
+function chatGptPromptDomHelpersExpression(): string {
+  return `
+    const chatGptPromptInputSelectors = ${JSON.stringify(CHATGPT_PROMPT_INPUT_SELECTORS)};
+    const chatGptSendButtonSelectors = ${JSON.stringify(CHATGPT_SEND_BUTTON_SELECTORS)};
+    const chatGptElementVisible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 20 && rect.height > 10 && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+    };
+    const chatGptInputText = (input) => input instanceof HTMLTextAreaElement
+      ? input.value
+      : (input.innerText || input.textContent || '');
+    const chatGptFindPromptInput = () => {
+      const seen = new Set();
+      const candidates = [];
+      for (const selector of chatGptPromptInputSelectors) {
+        let nodes = [];
+        try {
+          nodes = Array.from(document.querySelectorAll(selector));
+        } catch {}
+        for (const node of nodes) {
+          if (!(node instanceof HTMLElement) || seen.has(node)) continue;
+          seen.add(node);
+          const contentEditable = node.getAttribute('contenteditable');
+          const editable = node instanceof HTMLTextAreaElement
+            || node.isContentEditable
+            || contentEditable === 'true'
+            || contentEditable === 'plaintext-only';
+          const disabled = node.getAttribute('aria-disabled') === 'true'
+            || (node instanceof HTMLTextAreaElement && (node.disabled || node.readOnly));
+          if (!editable || disabled || !chatGptElementVisible(node) || node.closest('[aria-hidden="true"]')) continue;
+          candidates.push({ element: node, selector, rect: node.getBoundingClientRect() });
+        }
+      }
+      candidates.sort((a, b) => {
+        const aBottom = a.rect.top + a.rect.height;
+        const bBottom = b.rect.top + b.rect.height;
+        return bBottom - aBottom || (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height);
+      });
+      return candidates[0] || null;
+    };
+    const chatGptFindSendButton = () => {
+      const seen = new Set();
+      const candidates = [];
+      for (const selector of chatGptSendButtonSelectors) {
+        let nodes = [];
+        try {
+          nodes = Array.from(document.querySelectorAll(selector));
+        } catch {}
+        for (const node of nodes) {
+          if (!(node instanceof HTMLElement) || seen.has(node)) continue;
+          seen.add(node);
+          if (!chatGptElementVisible(node) || node.closest('[aria-hidden="true"]')) continue;
+          candidates.push({ element: node, selector, rect: node.getBoundingClientRect() });
+        }
+      }
+      candidates.sort((a, b) => {
+        const aBottom = a.rect.top + a.rect.height;
+        const bBottom = b.rect.top + b.rect.height;
+        return bBottom - aBottom || (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height);
+      });
+      return candidates[0] || null;
+    };
+    const chatGptPromptDiagnostics = () => {
+      const visibleEditableCount = Array.from(document.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"], textarea'))
+        .filter((node) => node instanceof HTMLElement && chatGptElementVisible(node)).length;
+      const promptMatchCount = chatGptPromptInputSelectors.reduce((count, selector) => {
+        try {
+          return count + document.querySelectorAll(selector).length;
+        } catch {
+          return count;
+        }
+      }, 0);
+      const buttonMatchCount = chatGptSendButtonSelectors.reduce((count, selector) => {
+        try {
+          return count + document.querySelectorAll(selector).length;
+        } catch {
+          return count;
+        }
+      }, 0);
+      const bodyPreview = (document.body?.innerText || '').replace(/\\s+/g, ' ').slice(0, 220);
+      return [
+        'url=' + location.href,
+        'title=' + document.title,
+        'promptMatches=' + promptMatchCount,
+        'visibleEditable=' + visibleEditableCount,
+        'sendButtons=' + buttonMatchCount,
+        bodyPreview ? 'body=' + bodyPreview : ''
+      ].filter(Boolean).join('; ');
+    };
+  `
+}
+
 function chatGptTargetStateExpression(): string {
   return `(() => {
-    const input = document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea[aria-label*="Chat"]');
-    if (!(input instanceof HTMLElement)) {
-      return { url: location.href, hasPrompt: false, visiblePrompt: false, inputTextLength: 0 };
-    }
-    const rect = input.getBoundingClientRect();
-    const text = input instanceof HTMLTextAreaElement ? input.value : (input.innerText || input.textContent || '');
+    ${chatGptPromptDomHelpersExpression()}
+    const found = chatGptFindPromptInput();
+    const input = found?.element;
+    const text = input ? chatGptInputText(input) : '';
     return {
       url: location.href,
-      hasPrompt: true,
-      visiblePrompt: !!(rect.width && rect.height),
-      inputTextLength: text.trim().length
+      title: document.title,
+      hasPrompt: !!input,
+      visiblePrompt: !!input,
+      inputTextLength: text.trim().length,
+      promptSelector: found?.selector,
+      diagnostics: chatGptPromptDiagnostics()
     };
   })()`
 }
@@ -376,14 +525,12 @@ async function waitForChatGptTarget(
       for (const target of chatGptTargets) {
         try {
           const state = await withCdpTarget(target, async (socket, idCounter) => {
-            const result = await cdpSend<{
-              result?: { value?: { visiblePrompt?: boolean; inputTextLength?: number } }
-            }>(socket, idCounter, 'Runtime.evaluate', {
+            const result = await cdpSend<RuntimeEvaluateResult<ChatGptPromptState>>(socket, idCounter, 'Runtime.evaluate', {
               expression: chatGptTargetStateExpression(),
               awaitPromise: false,
               returnByValue: true,
             })
-            return result.result?.value
+            return readRuntimeEvaluateValue(result)
           })
           if (state?.visiblePrompt && !state.inputTextLength) {
             return target
@@ -426,11 +573,13 @@ async function waitForChatGptTarget(
 
 function chatGptSubmitExpression(): string {
   return `(() => {
-    const button = document.querySelector('[data-testid="send-button"], #composer-submit-button');
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error('ChatGPT send button not found');
+    ${chatGptPromptDomHelpersExpression()}
+    const found = chatGptFindSendButton();
+    const button = found?.element;
+    if (!(button instanceof HTMLElement)) {
+      throw new Error('ChatGPT send button not found; ' + chatGptPromptDiagnostics());
     }
-    if (button.disabled) {
+    if (button.disabled === true || button.getAttribute('aria-disabled') === 'true') {
       throw new Error('ChatGPT send button is disabled');
     }
     button.click();
@@ -440,34 +589,29 @@ function chatGptSubmitExpression(): string {
 
 function chatGptPromptStateExpression(expectedPrefix = ''): string {
   return `(() => {
-    const input = document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea[aria-label*="Chat"]');
-    const button = document.querySelector('[data-testid="send-button"], #composer-submit-button');
+    ${chatGptPromptDomHelpersExpression()}
+    const input = chatGptFindPromptInput()?.element;
+    const button = chatGptFindSendButton()?.element;
     const expectedPrefix = ${JSON.stringify(expectedPrefix)};
-    const text = input instanceof HTMLTextAreaElement
-      ? input.value
-      : input instanceof HTMLElement
-        ? (input.innerText || input.textContent || '')
-        : '';
+    const text = input ? chatGptInputText(input) : '';
     return {
       textLength: text.trim().length,
       textPreview: text.trim().slice(0, 120),
       hasExpectedPrefix: expectedPrefix.length === 0 ? true : text.includes(expectedPrefix),
       buttonVisible: button instanceof HTMLElement ? !!(button.offsetWidth || button.offsetHeight || button.getClientRects().length) : false,
-      buttonDisabled: button instanceof HTMLButtonElement ? button.disabled : true
+      buttonDisabled: button instanceof HTMLElement ? button.disabled === true || button.getAttribute('aria-disabled') === 'true' : true,
+      diagnostics: chatGptPromptDiagnostics()
     };
   })()`
 }
 
 function chatGptSubmittedStateExpression(promptPrefix: string): string {
   return `(() => {
-    const input = document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea[aria-label*="Chat"]');
+    ${chatGptPromptDomHelpersExpression()}
+    const input = chatGptFindPromptInput()?.element;
     const body = document.body.innerText || '';
     const promptPrefix = ${JSON.stringify(promptPrefix)};
-    const text = input instanceof HTMLTextAreaElement
-      ? input.value
-      : input instanceof HTMLElement
-        ? (input.innerText || input.textContent || '')
-        : '';
+    const text = input ? chatGptInputText(input) : '';
     return {
       url: location.href,
       inputTextLength: text.trim().length,
@@ -478,16 +622,19 @@ function chatGptSubmittedStateExpression(promptPrefix: string): string {
 
 function chatGptFocusPromptExpression(): string {
   return `(() => {
-    const input = document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea[aria-label*="Chat"]');
+    ${chatGptPromptDomHelpersExpression()}
+    const input = chatGptFindPromptInput()?.element;
     if (!(input instanceof HTMLElement)) {
-      throw new Error('ChatGPT prompt input not found');
+      throw new Error('ChatGPT prompt input not found; ' + chatGptPromptDiagnostics());
     }
     input.focus();
     if (input instanceof HTMLTextAreaElement) {
       input.value = '';
     } else {
       document.execCommand('selectAll');
-      document.execCommand('delete');
+      if (!document.execCommand('delete')) {
+        input.textContent = '';
+      }
     }
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
     return true;
@@ -497,9 +644,10 @@ function chatGptFocusPromptExpression(): string {
 function chatGptSetPromptExpression(prompt: string): string {
   return `(() => {
     const promptText = ${JSON.stringify(prompt)};
-    const input = document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea[aria-label*="Chat"]');
+    ${chatGptPromptDomHelpersExpression()}
+    const input = chatGptFindPromptInput()?.element;
     if (!(input instanceof HTMLElement)) {
-      throw new Error('ChatGPT prompt input not found');
+      throw new Error('ChatGPT prompt input not found; ' + chatGptPromptDiagnostics());
     }
     input.focus();
     if (input instanceof HTMLTextAreaElement) {
@@ -522,9 +670,10 @@ function chatGptSetPromptExpression(prompt: string): string {
 
 function chatGptPromptClickPointExpression(): string {
   return `(() => {
-    const input = document.querySelector('#prompt-textarea, [contenteditable="true"][role="textbox"], textarea[aria-label*="Chat"]');
+    ${chatGptPromptDomHelpersExpression()}
+    const input = chatGptFindPromptInput()?.element;
     if (!(input instanceof HTMLElement)) {
-      throw new Error('ChatGPT prompt input not found');
+      throw new Error('ChatGPT prompt input not found; ' + chatGptPromptDiagnostics());
     }
     const rect = input.getBoundingClientRect();
     return {
@@ -538,24 +687,36 @@ async function waitForChatGptComposer(
   socket: WebSocket,
   idCounter: { value: number },
   timeoutMs: number,
+  onStatus?: BrowserRunStatusEmitter,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs
   let lastError = 'ChatGPT prompt input not found'
+  let lastStatusAt = 0
 
   while (Date.now() < deadline) {
     try {
-      const state = await cdpSend<{
-        result?: { value?: { visiblePrompt?: boolean } }
-      }>(socket, idCounter, 'Runtime.evaluate', {
+      const state = await cdpSend<RuntimeEvaluateResult<ChatGptPromptState>>(socket, idCounter, 'Runtime.evaluate', {
         expression: chatGptTargetStateExpression(),
         awaitPromise: false,
         returnByValue: true,
       })
-      if (state.result?.value?.visiblePrompt) {
+      const promptState = readRuntimeEvaluateValue(state)
+      if (promptState?.visiblePrompt) {
         return
+      }
+      if (promptState?.diagnostics) {
+        lastError = `ChatGPT prompt input not found; ${promptState.diagnostics}`
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
+    }
+    if (onStatus && Date.now() - lastStatusAt > 5_000) {
+      lastStatusAt = Date.now()
+      onStatus({
+        phase: 'browser_prompt',
+        message: '等待 ChatGPT 输入框出现',
+        detail: lastError,
+      })
     }
     await sleep(500)
   }
@@ -591,20 +752,39 @@ async function submitChatGptPromptWithCdp(args: {
             await cdpSend(socket, idCounter, 'Page.enable')
             await cdpSend(socket, idCounter, 'Runtime.enable')
             await cdpSend(socket, idCounter, 'Page.bringToFront').catch(() => undefined)
-            await cdpSend(socket, idCounter, 'Page.navigate', { url: args.targetUrl }).catch(() => undefined)
-            await waitForChatGptComposer(socket, idCounter, 20_000)
-            await cdpSend(socket, idCounter, 'Runtime.evaluate', {
+            const initialState = readRuntimeEvaluateValue(await cdpSend<RuntimeEvaluateResult<ChatGptPromptState>>(socket, idCounter, 'Runtime.evaluate', {
+              expression: chatGptTargetStateExpression(),
+              awaitPromise: false,
+              returnByValue: true,
+            }))
+            if (initialState?.visiblePrompt) {
+              args.onStatus?.({
+                phase: 'browser_prompt',
+                message: '复用当前 ChatGPT 输入框',
+                detail: `${initialState.title || initialState.url}${initialState.promptSelector ? ` · ${initialState.promptSelector}` : ''}`,
+              })
+            } else {
+              args.onStatus?.({
+                phase: 'browser_prompt',
+                message: 'ChatGPT 页面未就绪，重新打开输入区',
+                detail: initialState?.diagnostics || target.url || args.targetUrl,
+              })
+              await cdpSend(socket, idCounter, 'Page.navigate', { url: args.targetUrl }).catch(() => undefined)
+              await sleep(1_500)
+              await waitForChatGptComposer(socket, idCounter, Math.min(Math.max(10_000, deadline - Date.now()), 90_000), args.onStatus)
+            }
+            readRuntimeEvaluateValue(await cdpSend<RuntimeEvaluateResult<boolean>>(socket, idCounter, 'Runtime.evaluate', {
               expression: chatGptFocusPromptExpression(),
               awaitPromise: false,
               returnByValue: true,
-            })
-            const point = await cdpSend<{ result?: { value?: { x?: number; y?: number } } }>(socket, idCounter, 'Runtime.evaluate', {
+            }))
+            const point = readRuntimeEvaluateValue(await cdpSend<RuntimeEvaluateResult<{ x?: number; y?: number }>>(socket, idCounter, 'Runtime.evaluate', {
               expression: chatGptPromptClickPointExpression(),
               awaitPromise: false,
               returnByValue: true,
-            })
-            const x = point.result?.value?.x
-            const y = point.result?.value?.y
+            }))
+            const x = point?.x
+            const y = point?.y
             if (!Number.isFinite(x) || !Number.isFinite(y)) {
               throw new Error('ChatGPT prompt input coordinates unavailable')
             }
@@ -628,28 +808,26 @@ async function submitChatGptPromptWithCdp(args: {
               button: 'left',
               clickCount: 1,
             })
-            await cdpSend(socket, idCounter, 'Runtime.evaluate', {
+            readRuntimeEvaluateValue(await cdpSend<RuntimeEvaluateResult<number>>(socket, idCounter, 'Runtime.evaluate', {
               expression: chatGptSetPromptExpression(args.prompt),
               awaitPromise: false,
               returnByValue: true,
-            })
+            }))
             await sleep(750)
             const promptPrefix = args.prompt.trim().slice(0, 80)
-            let state = await cdpSend<{
-              result?: { value?: { textLength?: number; textPreview?: string; hasExpectedPrefix?: boolean; buttonVisible?: boolean; buttonDisabled?: boolean } }
-            }>(socket, idCounter, 'Runtime.evaluate', {
+            let state = await cdpSend<RuntimeEvaluateResult<{ textLength?: number; textPreview?: string; hasExpectedPrefix?: boolean; buttonVisible?: boolean; buttonDisabled?: boolean; diagnostics?: string }>>(socket, idCounter, 'Runtime.evaluate', {
               expression: chatGptPromptStateExpression(promptPrefix),
               awaitPromise: false,
               returnByValue: true,
             })
-            let promptState = state.result?.value
+            let promptState = readRuntimeEvaluateValue(state)
             if (!promptState?.textLength || promptState.textLength < 10 || !promptState.hasExpectedPrefix || promptState.buttonDisabled) {
               await setMacClipboard(args.prompt)
-              await cdpSend(socket, idCounter, 'Runtime.evaluate', {
+              readRuntimeEvaluateValue(await cdpSend<RuntimeEvaluateResult<boolean>>(socket, idCounter, 'Runtime.evaluate', {
                 expression: chatGptFocusPromptExpression(),
                 awaitPromise: false,
                 returnByValue: true,
-              })
+              }))
               await cdpSend(socket, idCounter, 'Input.dispatchMouseEvent', {
                 type: 'mousePressed',
                 x,
@@ -681,38 +859,34 @@ async function submitChatGptPromptWithCdp(args: {
                 modifiers: 4,
               })
               await sleep(1_500)
-              state = await cdpSend<{
-                result?: { value?: { textLength?: number; textPreview?: string; hasExpectedPrefix?: boolean; buttonVisible?: boolean; buttonDisabled?: boolean } }
-              }>(socket, idCounter, 'Runtime.evaluate', {
+              state = await cdpSend<RuntimeEvaluateResult<{ textLength?: number; textPreview?: string; hasExpectedPrefix?: boolean; buttonVisible?: boolean; buttonDisabled?: boolean; diagnostics?: string }>>(socket, idCounter, 'Runtime.evaluate', {
                 expression: chatGptPromptStateExpression(promptPrefix),
                 awaitPromise: false,
                 returnByValue: true,
               })
-              promptState = state.result?.value
+              promptState = readRuntimeEvaluateValue(state)
             }
             if (!promptState?.textLength || promptState.textLength < 10 || !promptState.hasExpectedPrefix) {
-              throw new Error(`ChatGPT prompt text was not inserted${promptState?.textPreview ? `; saw: ${promptState.textPreview}` : ''}`)
+              throw new Error(`ChatGPT prompt text was not inserted${promptState?.textPreview ? `; saw: ${promptState.textPreview}` : ''}${promptState?.diagnostics ? `; ${promptState.diagnostics}` : ''}`)
             }
             if (!promptState.buttonVisible || promptState.buttonDisabled) {
-              throw new Error('ChatGPT send button is not ready')
+              throw new Error(`ChatGPT send button is not ready${promptState.diagnostics ? `; ${promptState.diagnostics}` : ''}`)
             }
-            const submitted = await cdpSend<{ result?: { value?: string } }>(socket, idCounter, 'Runtime.evaluate', {
+            const submitted = await cdpSend<RuntimeEvaluateResult<string>>(socket, idCounter, 'Runtime.evaluate', {
               expression: chatGptSubmitExpression(),
               awaitPromise: false,
               returnByValue: true,
             })
             const submitDeadline = Date.now() + 20_000
-            let latestUrl = submitted.result?.value
+            let latestUrl = readRuntimeEvaluateValue(submitted)
             while (Date.now() < submitDeadline) {
               await sleep(1_000)
-              const locationResult = await cdpSend<{
-                result?: { value?: { url?: string; inputTextLength?: number; bodyHasPrompt?: boolean } }
-              }>(socket, idCounter, 'Runtime.evaluate', {
+              const locationResult = await cdpSend<RuntimeEvaluateResult<{ url?: string; inputTextLength?: number; bodyHasPrompt?: boolean }>>(socket, idCounter, 'Runtime.evaluate', {
                 expression: chatGptSubmittedStateExpression(promptPrefix),
                 awaitPromise: false,
                 returnByValue: true,
               }).catch(() => undefined)
-              const submittedState = locationResult?.result?.value
+              const submittedState = readRuntimeEvaluateValue(locationResult)
               latestUrl = submittedState?.url || latestUrl
               if (submittedState?.bodyHasPrompt && (submittedState.url?.includes('/c/') || submittedState.inputTextLength === 0)) {
                 return submittedState.url
@@ -820,6 +994,10 @@ async function captureLatestChatGptImageFromBrave(args: {
 }
 
 export const agentOSBrowserUseRunnerTestables = {
+  chatGptPromptStateExpression,
+  chatGptSetPromptExpression,
+  chatGptSubmitExpression,
+  chatGptTargetStateExpression,
   isChatGptTargetUrl,
   summarizeCdpTargets,
   waitForChatGptTarget,
@@ -934,7 +1112,7 @@ export async function runAgentOSBraveChatGptPrompt(args: {
       port: capability.remoteDebuggingPort,
       prompt: args.prompt,
       targetUrl,
-      timeoutMs: args.timeoutMs ?? 30_000,
+      timeoutMs: args.timeoutMs ?? 120_000,
       onStatus: args.onStatus,
     })
     args.onStatus?.({
