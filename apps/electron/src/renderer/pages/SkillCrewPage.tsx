@@ -652,6 +652,11 @@ export default function SkillCrewPage() {
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const mainRef = React.useRef<HTMLElement | null>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const activeSkillMomentRunRef = React.useRef<{
+    runId: string
+    workspaceId: string
+    roomId: string
+  } | null>(null)
   const [composerFrame, setComposerFrame] = React.useState<ComposerFrame | undefined>()
 
   const selectedTargets = React.useMemo(
@@ -840,13 +845,26 @@ export default function SkillCrewPage() {
 
   React.useEffect(() => {
     const unsubscribe = window.electronAPI.onSkillMomentRunStatus?.((event) => {
-      if (event.workspaceId !== activeWorkspaceId || event.roomId !== activeChannel) {
-        return
+      const activeRun = activeSkillMomentRunRef.current
+      const isActiveRun = !!event.runId && activeRun?.runId === event.runId
+      const isVisibleRoom = event.workspaceId === activeWorkspaceId && event.roomId === activeChannel
+      if (isVisibleRoom) {
+        setSkillMomentRunStatuses((current) => [event, ...current].slice(0, 8))
       }
-      setSkillMomentRunStatuses((current) => [event, ...current].slice(0, 8))
+      if (isActiveRun && event.phase === 'complete') {
+        activeSkillMomentRunRef.current = null
+        setSkillMomentsRunning(false)
+        if (isVisibleRoom) {
+          void loadSkillMoments()
+        }
+      }
+      if (isActiveRun && event.phase === 'error') {
+        activeSkillMomentRunRef.current = null
+        setSkillMomentsRunning(false)
+      }
     })
     return () => unsubscribe?.()
-  }, [activeChannel, activeWorkspaceId])
+  }, [activeChannel, activeWorkspaceId, loadSkillMoments])
 
   const runSkillMomentCycle = React.useCallback(async () => {
     if (!activeWorkspaceId || skillMomentsRunning) {
@@ -896,10 +914,18 @@ export default function SkillCrewPage() {
       createdAt: new Date().toISOString(),
     }])
     setSkillMomentsRunning(true)
+    const clientRunId = `moment-run-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+    activeSkillMomentRunRef.current = {
+      runId: clientRunId,
+      workspaceId: activeWorkspaceId,
+      roomId: activeChannel,
+    }
+    let waitForStatusCompletion = false
     try {
       const result = await window.electronAPI.runSkillMomentCycle({
         workspaceId: activeWorkspaceId,
         roomId: activeChannel,
+        runId: clientRunId,
         maxMoments: activeChannel === 'screenplay' ? 6 : 5,
         skills: cycleRoles.map((role) => ({
           id: role.id,
@@ -909,6 +935,11 @@ export default function SkillCrewPage() {
         })),
       })
       setSkillMomentsLastRunPath(result.path)
+      if (result.state === 'started') {
+        waitForStatusCompletion = true
+        return
+      }
+      activeSkillMomentRunRef.current = null
       setSkillMoments((current) => {
         const freshIds = new Set(result.moments.map((moment) => moment.id))
         return [
@@ -917,10 +948,14 @@ export default function SkillCrewPage() {
         ].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       })
     } catch (error) {
+      if (activeSkillMomentRunRef.current?.runId === clientRunId) {
+        activeSkillMomentRunRef.current = null
+      }
       console.warn('[SkillCrew] Failed to run Skill Moments cycle', error)
       const failureStatus: SkillMomentRunStatusEvent = {
         workspaceId: activeWorkspaceId,
         roomId: activeChannel,
+        runId: clientRunId,
         phase: 'error',
         message: '刷新朋友圈失败',
         detail: error instanceof Error ? error.message : String(error),
@@ -928,7 +963,12 @@ export default function SkillCrewPage() {
       }
       setSkillMomentRunStatuses((current) => [failureStatus, ...current].slice(0, 8))
     } finally {
-      setSkillMomentsRunning(false)
+      if (!waitForStatusCompletion) {
+        if (activeSkillMomentRunRef.current?.runId === clientRunId) {
+          activeSkillMomentRunRef.current = null
+        }
+        setSkillMomentsRunning(false)
+      }
     }
   }, [activeChannel, activeWorkspaceId, mentionableRoles, skillMomentsRunning])
 

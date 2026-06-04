@@ -250,12 +250,21 @@ const EXPECTED_CHANNELS: string[] = [
   'shell:openFile',
   'shell:openUrl',
   'shell:showInFolder',
+  'skill-moments:list',
+  'skill-moments:record-feedback',
+  'skill-moments:run-cycle',
+  'skill-moments:run-status',
   'skills:changed',
+  'skills:createFolder',
   'skills:delete',
   'skills:get',
   'skills:getFiles',
+  'skills:listFolders',
+  'skills:move',
   'skills:openEditor',
   'skills:openFinder',
+  'skills:readContent',
+  'skills:saveContent',
   'sources:changed',
   'sources:create',
   'sources:delete',
@@ -362,6 +371,12 @@ describe('BroadcastEventMap payload shapes', () => {
   it('skills:changed carries (workspaceId, skills)', () => {
     type Payload = BroadcastEventMap[typeof RPC_CHANNELS.skills.CHANGED]
     const _check: AssertTuple<Payload, 2> = true
+    expect(_check).toBe(true)
+  })
+
+  it('skill-moments:run-status carries one status event', () => {
+    type Payload = BroadcastEventMap[typeof RPC_CHANNELS.skillMoments.RUN_STATUS]
+    const _check: AssertTuple<Payload, 1> = true
     expect(_check).toBe(true)
   })
 })

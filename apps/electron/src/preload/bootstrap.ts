@@ -429,12 +429,6 @@ client.onConnectionStateChanged((state) => {
 ;(api as ElectronAPI).getGitInfo = (dirPath: string) => ipcRenderer.invoke('git:getInfo', dirPath)
 ;(api as ElectronAPI).runCodexSkill = (args) => ipcRenderer.invoke('skill-crew:run-codex-skill', args)
 ;(api as ElectronAPI).recordSkillFeedback = (args) => ipcRenderer.invoke('skill-crew:record-feedback', args)
-;(api as ElectronAPI).runSkillMomentCycle = (args) => ipcRenderer.invoke('skill-moments:run-cycle', args)
-;(api as ElectronAPI).onSkillMomentRunStatus = (callback) => {
-  const handler = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload)
-  ipcRenderer.on('skill-moments:run-status', handler)
-  return () => { ipcRenderer.removeListener('skill-moments:run-status', handler) }
-}
 ;(api as ElectronAPI).refreshSkillCrewSkills = (workspaceId, workingDirectory) =>
   ipcRenderer.invoke('skill-crew:refresh-skills', workspaceId, workingDirectory)
 ;(api as ElectronAPI).importSkillToCrewFolder = (args) => ipcRenderer.invoke('skill-crew:import-skill', args)

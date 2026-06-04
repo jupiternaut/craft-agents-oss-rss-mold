@@ -86,6 +86,7 @@ export type SkillMomentExecutionMode = 'mock' | 'real'
 export type SkillMomentRunCycleInput = {
   workspaceId: string
   roomId?: string
+  runId?: string
   mode?: SkillMomentExecutionMode
   skills?: SkillMomentSkillInput[]
   skillSlugs?: string[]
@@ -97,6 +98,7 @@ export type SkillMomentRunCycleInput = {
 export type SkillMomentRunCycleResult = {
   success: boolean
   runId: string
+  state?: 'started' | 'completed'
   moments: SkillMoment[]
   sourceDigests: SkillMomentSourceDigest[]
   path: string

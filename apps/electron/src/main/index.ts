@@ -1605,7 +1605,7 @@ async function runSkillMomentCycle(
 
   skillMomentCycleLocks.add(lockKey)
   try {
-    const runId = `moment-run-${Date.now()}-${randomUUID().slice(0, 8)}`
+    const runId = args.runId || `moment-run-${Date.now()}-${randomUUID().slice(0, 8)}`
     const status = (
       phase: SkillMomentRunStatusEvent['phase'],
       message: string,
@@ -2457,6 +2457,7 @@ app.whenReady().then(async () => {
             browserPaneManager: browserPaneManager ?? undefined,
             oauthFlowStore: ofs,
             messagingRegistry: messagingHandle.registry,
+            skillMomentRunCycleExecutor: (input, emitStatus) => runSkillMomentCycle(input, emitStatus),
           }
         },
         // Headless: register only core handlers (no GUI handlers for browser, settings, etc.)
@@ -2690,18 +2691,6 @@ app.whenReady().then(async () => {
 
       ipcMain.handle('skill-moments:list', async (_event, args: SkillMomentListInput) => {
         return await listSkillMoments(args)
-      })
-
-      ipcMain.handle('skill-moments:run-cycle', async (event, args: SkillMomentRunCycleInput) => {
-        return await runSkillMomentCycle(args, (payload) => {
-          try {
-            if (!event.sender.isDestroyed()) {
-              event.sender.send('skill-moments:run-status', payload)
-            }
-          } catch (error) {
-            mainLog.warn('Failed to send Skill Moments run status:', error)
-          }
-        })
       })
 
       ipcMain.handle('skill-moments:record-feedback', async (_event, args: SkillMomentFeedbackRecordInput) => {

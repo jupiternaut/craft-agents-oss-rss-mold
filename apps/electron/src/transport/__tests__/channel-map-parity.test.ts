@@ -32,8 +32,6 @@ type ApiToChannelMapKeys = Exclude<
   | 'getGitInfo' // direct IPC to main process — local git helper
   | 'runCodexSkill' // direct IPC to main process — local Codex CLI OAuth skill runner
   | 'recordSkillFeedback' // direct IPC to main process — local Skill Crew feedback sample writer
-  | 'runSkillMomentCycle' // direct IPC to main process — local AgentOS mock cycle runner
-  | 'onSkillMomentRunStatus' // direct IPC listener — local Skill Moments run progress
   | 'refreshSkillCrewSkills' // direct IPC to main process — cache-bypassing Skill Crew filesystem refresh
   | 'importSkillToCrewFolder' // direct IPC to main process — copies installed skills into a Crew room folder
   | 'flowProjectCheckStatus' // direct IPC to main process — local filesystem flow-next bridge

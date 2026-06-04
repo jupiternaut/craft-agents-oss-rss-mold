@@ -4,6 +4,7 @@ import type { IOAuthFlowStore } from './oauth-flow-store-interface'
 import type { IBrowserPaneManager } from './browser-pane-manager-interface'
 import type { IWindowManager } from './window-manager-interface'
 import type { IMessagingGatewayRegistry } from './messaging-registry-interface'
+import type { SkillMomentRunCycleExecutor } from '../skill-moments/jobs'
 
 /**
  * Generic handler dependency bag.
@@ -27,4 +28,5 @@ export interface HandlerDeps<
   browserPaneManager?: TBrowserPaneManager
   oauthFlowStore: TOAuthFlowStore
   messagingRegistry?: IMessagingGatewayRegistry
+  skillMomentRunCycleExecutor?: SkillMomentRunCycleExecutor
 }
