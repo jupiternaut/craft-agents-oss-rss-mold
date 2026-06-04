@@ -55,6 +55,12 @@ async function createHarness(deps: HandlerDeps) {
     async invokeClient() {
       return undefined
     },
+    hasClientCapability() {
+      return false
+    },
+    findClientsWithCapability() {
+      return []
+    },
   }
   const { registerSkillMomentsHandlers } = await import('./skill-moments')
   registerSkillMomentsHandlers(server, deps)

@@ -60,8 +60,22 @@ Sentry.init({
 })
 
 // Initialize i18n for main process (menus, dialogs, etc.)
-import { setupI18n, i18n } from '@craft-agent/shared/i18n'
+//
+// The main-process i18n instance has no detection plugin (no localStorage in Node)
+// — it always starts at `fallbackLng: 'en'`. We hydrate it here from the persisted
+// `uiLanguage` preference, which is maintained by the `i18n:changeLanguage` IPC
+// handler whenever the user changes Appearance → Language. Without this, the
+// renderer would restore its language from localStorage on every restart while
+// the main process silently stayed at English — breaking session title language,
+// the system prompt's "Preferred language" line, and the native menu.
+import { setupI18n, i18n, SUPPORTED_LANGUAGE_CODES, type LanguageCode } from '@craft-agent/shared/i18n'
+import { getPersistedUiLanguage, setPersistedUiLanguage } from '@craft-agent/shared/config'
 setupI18n()
+const persistedUiLanguage = getPersistedUiLanguage()
+if (persistedUiLanguage) {
+  void i18n.changeLanguage(persistedUiLanguage)
+}
+// Note: deferred startup log lives below where mainLog is available (after log.initialize()).
 
 // Set anonymous machine ID for Sentry user tracking (no PII — just a hash).
 // Uses hostname + homedir to produce a stable per-machine identifier.
@@ -125,7 +139,7 @@ import { abortChat, executeChat, type RegisteredProject } from './lib/epic-chat-
 import { applyPlan, executePlan, type PlanResult } from './lib/planning-agent'
 import type { CodexSkillRunResult, FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState, SkillCrewImportSkillArgs, SkillCrewImportSkillResult, SkillFeedbackRecordInput, SkillMoment, SkillMomentCritique, SkillMomentFeedbackRecordInput, SkillMomentListInput, SkillMomentMedia, SkillMomentReaction, SkillMomentRunCycleInput, SkillMomentRunCycleResult, SkillMomentRunStatusEvent, SkillMomentSkillInput, SkillMomentSourceDigest } from '../shared/types'
 import type { TaskStatus } from '../shared/flow-schemas'
-import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating } from './auto-update'
+import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
 import { getSkillCrewRoomPolicy, normalizeSkillMomentSlug } from './skill-crew/room-policies'
@@ -156,6 +170,13 @@ import {
 
 // Initialize electron-log for renderer process support
 log.initialize()
+
+// Diagnostic: report main-process i18n hydration result. We log here (not inline
+// at the hydration site above) because mainLog is only available after this point.
+mainLog.info('[i18n] startup hydration', {
+  persistedUiLanguage: persistedUiLanguage ?? null,
+  resolvedLanguageAfterHydration: i18n.resolvedLanguage ?? null,
+})
 
 // Enable debug/perf in dev mode (running from source)
 if (isDebugMode) {
@@ -2631,6 +2652,7 @@ app.whenReady().then(async () => {
     browserPaneManager = new BrowserPaneManager()
     browserPaneManager.setWindowManager(windowManager)
     browserPaneManager.registerToolbarIpc()
+    browserPaneManager.registerCapabilityIpc()
 
     // Build real PlatformServices from Electron APIs
     const platform: PlatformServices = createElectronPlatform({
@@ -2811,6 +2833,7 @@ app.whenReady().then(async () => {
           sm.setBrowserPaneManager(browserPaneManager!)
           return sm
         },
+        bindRpcServer: (sm, server) => sm.setRpcServer(server),
         createHandlerDeps: ({ sessionManager: sm, platform: p, oauthFlowStore: ofs }) => {
           // The messaging handle is built here because it needs sessionManager.
           // The WS publisher is attached after bootstrapServer resolves (via
@@ -3046,9 +3069,28 @@ app.whenReady().then(async () => {
         app.exit(0)
       })
 
-      // Language change: sync from renderer to main process and rebuild native menu
-      ipcMain.handle('i18n:changeLanguage', async (_event, lang: string) => {
-        i18n.changeLanguage(lang)
+      // Language change: sync from renderer to main process, persist, and rebuild native menu.
+      // Persistence here is what lets the next app launch hydrate main's i18n correctly —
+      // see the `getPersistedUiLanguage()` block at the top of this file.
+      ipcMain.handle('i18n:changeLanguage', async (_event, lang: unknown) => {
+        const previousResolved = i18n.resolvedLanguage ?? null
+        if (typeof lang !== 'string' || !SUPPORTED_LANGUAGE_CODES.includes(lang as LanguageCode)) {
+          // Defense-in-depth: renderer guarantees a supported code, but if a renegade
+          // caller hands us garbage we drop it silently rather than poison i18n state.
+          mainLog.warn('[i18n] changeLanguage IPC rejected — unsupported code', {
+            incoming: lang,
+            previousResolved,
+          })
+          return
+        }
+        const code = lang as LanguageCode
+        await i18n.changeLanguage(code)
+        setPersistedUiLanguage(code)
+        mainLog.info('[i18n] changeLanguage IPC applied', {
+          incoming: code,
+          previousResolved,
+          newResolved: i18n.resolvedLanguage ?? null,
+        })
         const { rebuildMenu } = await import('./menu')
         await rebuildMenu()
       })
@@ -3401,6 +3443,11 @@ app.whenReady().then(async () => {
     // Initialize auto-update (check immediately on launch)
     // Skip in dev mode to avoid replacing /Applications app and launching it instead
     if (moduleSink) setAutoUpdateEventSink(moduleSink)
+    // Snapshot multi-window state BEFORE quitAndInstall. electron-updater
+    // (Squirrel.Mac) destroys BrowserWindows between quitAndInstall and
+    // before-quit firing; saving from before-quit alone would overwrite
+    // window-state.json with an empty array.
+    setBeforeUpdateQuitHook(() => captureAndSaveWindowState('pre-update'))
     if (app.isPackaged) {
       checkForUpdatesOnLaunch().catch(err => {
         mainLog.error('[auto-update] Launch check failed:', err)
@@ -3456,6 +3503,28 @@ app.on('window-all-closed', () => {
 // Track if we're in the process of quitting (to avoid re-entry)
 let isQuitting = false
 
+/**
+ * Capture the current multi-window state and persist it to disk.
+ * Called from two sites:
+ *   - before-quit (normal quit path, reason='before-quit')
+ *   - installUpdate hook (auto-update path, reason='pre-update'), because
+ *     electron-updater destroys BrowserWindows between quitAndInstall and
+ *     before-quit firing — by the time before-quit runs, getWindowStates()
+ *     returns an empty array and would clobber the on-disk state.
+ * Returns the number of windows saved, or -1 if windowManager isn't ready.
+ */
+function captureAndSaveWindowState(reason: 'before-quit' | 'pre-update'): number {
+  if (!windowManager) return -1
+  const windows = windowManager.getWindowStates()
+  const focusedWindow = BrowserWindow.getFocusedWindow()
+  const lastFocusedWorkspaceId = focusedWindow
+    ? windowManager.getWorkspaceForWindow(focusedWindow.webContents.id) ?? undefined
+    : undefined
+  saveWindowState({ windows, lastFocusedWorkspaceId })
+  mainLog.info('[window-state] saved', { windowCount: windows.length, reason })
+  return windows.length
+}
+
 // Save window state and clean up resources before quitting
 app.on('before-quit', async (event) => {
   // Avoid re-entry when we call app.exit()
@@ -3466,20 +3535,22 @@ app.on('before-quit', async (event) => {
   windowManager?.setAppQuitting(true)
 
   if (windowManager) {
-    // Get full window states (includes bounds, type, and query)
     const windows = windowManager.getWindowStates()
-    // Get the focused window's workspace as last focused
-    const focusedWindow = BrowserWindow.getFocusedWindow()
-    let lastFocusedWorkspaceId: string | undefined
-    if (focusedWindow) {
-      lastFocusedWorkspaceId = windowManager.getWorkspaceForWindow(focusedWindow.webContents.id) ?? undefined
+    // Empty-snapshot guard: during update-quit, electron-updater has already
+    // destroyed all BrowserWindows by the time before-quit fires. The pre-update
+    // hook already saved the real state — don't let this late save overwrite it.
+    if (windows.length === 0 && isUpdating()) {
+      mainLog.warn('[window-state] skip save: empty snapshot during update-quit (pre-update snapshot wins)')
+    } else {
+      captureAndSaveWindowState('before-quit')
     }
-
-    saveWindowState({
-      windows,
-      lastFocusedWorkspaceId,
+    // Diagnostic correlation with installUpdate's [update-flow] log.
+    mainLog.info('[update-flow] before-quit save', {
+      windowCount: windows.length,
+      electronWindowCount: BrowserWindow.getAllWindows().length,
+      isUpdating: isUpdating(),
+      reason: isUpdating() ? 'update-quit' : 'user-quit',
     })
-    mainLog.info('Saved window state:', windows.length, 'windows')
   }
 
   // Flush all pending session writes before quitting
