@@ -378,6 +378,9 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   // skill moments — workspace-owned JSONL feed and stage orchestration
   RPC_CHANNELS.skillMoments.LIST,
   RPC_CHANNELS.skillMoments.RUN_CYCLE,
+  RPC_CHANNELS.skillMoments.GET_RUN_JOB,
+  RPC_CHANNELS.skillMoments.LIST_RUN_JOBS,
+  RPC_CHANNELS.skillMoments.WAIT_RUN_JOB,
   RPC_CHANNELS.skillMoments.RUN_STATUS,
   RPC_CHANNELS.skillMoments.RECORD_FEEDBACK,
   RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES,

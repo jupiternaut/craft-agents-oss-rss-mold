@@ -5,6 +5,9 @@ import type {
   SkillMomentFeedbackRecordInput,
   SkillMomentListInput,
   SkillMomentRunCycleInput,
+  SkillMomentRunJobGetInput,
+  SkillMomentRunJobListInput,
+  SkillMomentRunJobWaitInput,
 } from '@craft-agent/shared/skill-moments'
 import { getWorkspaceByNameOrId } from '@craft-agent/shared/config'
 
@@ -22,13 +25,27 @@ import {
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.skillMoments.LIST,
   RPC_CHANNELS.skillMoments.RUN_CYCLE,
+  RPC_CHANNELS.skillMoments.GET_RUN_JOB,
+  RPC_CHANNELS.skillMoments.LIST_RUN_JOBS,
+  RPC_CHANNELS.skillMoments.WAIT_RUN_JOB,
   RPC_CHANNELS.skillMoments.RECORD_FEEDBACK,
   RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES,
   RPC_CHANNELS.skillMoments.REVIEW_EVOLUTION_CANDIDATE,
 ] as const
 
 export function registerSkillMomentsHandlers(server: RpcServer, deps: HandlerDeps): void {
-  const runJobs = new SkillMomentRunJobManager()
+  const runJobs = new SkillMomentRunJobManager({
+    recoveryExecutor: deps.skillMomentRunCycleExecutor,
+    recoveryMode: deps.skillMomentRunCycleExecutor ? 'restart' : 'fail',
+    emitRecoveredStatus: (event) => {
+      deps.platform.logger.info('[skill-moments] recovered run-cycle job status', {
+        workspaceId: event.workspaceId,
+        roomId: event.roomId,
+        runId: event.runId,
+        phase: event.phase,
+      })
+    },
+  })
 
   server.handle(RPC_CHANNELS.skillMoments.LIST, async (_ctx, args: SkillMomentListInput) => {
     const workspace = getWorkspaceByNameOrId(args.workspaceId)
@@ -67,6 +84,53 @@ export function registerSkillMomentsHandlers(server: RpcServer, deps: HandlerDep
         pushTyped(server, RPC_CHANNELS.skillMoments.RUN_STATUS, { to: 'client', clientId: ctx.clientId }, event)
       },
     })
+  })
+
+  server.handle(RPC_CHANNELS.skillMoments.GET_RUN_JOB, async (_ctx, args: SkillMomentRunJobGetInput) => {
+    const workspace = getWorkspaceByNameOrId(args.workspaceId)
+    if (!workspace) {
+      throw new Error(`Workspace not found: ${args.workspaceId}`)
+    }
+
+    return {
+      job: await runJobs.getRunAudit({
+        rootPath: workspace.rootPath,
+        workspaceId: args.workspaceId,
+        runId: args.runId,
+      }),
+    }
+  })
+
+  server.handle(RPC_CHANNELS.skillMoments.LIST_RUN_JOBS, async (_ctx, args: SkillMomentRunJobListInput) => {
+    const workspace = getWorkspaceByNameOrId(args.workspaceId)
+    if (!workspace) {
+      throw new Error(`Workspace not found: ${args.workspaceId}`)
+    }
+
+    return {
+      jobs: await runJobs.listRunAudits({
+        rootPath: workspace.rootPath,
+        workspaceId: args.workspaceId,
+        roomId: args.roomId,
+        limit: args.limit,
+      }),
+    }
+  })
+
+  server.handle(RPC_CHANNELS.skillMoments.WAIT_RUN_JOB, async (_ctx, args: SkillMomentRunJobWaitInput) => {
+    const workspace = getWorkspaceByNameOrId(args.workspaceId)
+    if (!workspace) {
+      throw new Error(`Workspace not found: ${args.workspaceId}`)
+    }
+
+    return {
+      job: await runJobs.waitForRunAudit({
+        rootPath: workspace.rootPath,
+        workspaceId: args.workspaceId,
+        runId: args.runId,
+        timeoutMs: args.timeoutMs,
+      }),
+    }
   })
 
   server.handle(RPC_CHANNELS.skillMoments.RECORD_FEEDBACK, async (_ctx, args: SkillMomentFeedbackRecordInput) => {

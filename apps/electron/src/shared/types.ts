@@ -66,6 +66,8 @@ import type {
   SkillFeedbackVerdict,
   SkillMoment,
   SkillMomentCritique,
+  SkillMomentActorIntentCard,
+  SkillMomentDemoContract,
   SkillMomentEvolutionCandidateListInput,
   SkillMomentEvolutionCandidateListResult,
   SkillMomentEvolutionCandidateReviewInput,
@@ -78,14 +80,31 @@ import type {
   SkillMomentReaction,
   SkillMomentRunCycleInput,
   SkillMomentRunCycleResult,
+  SkillMomentRunJobAudit,
+  SkillMomentRunJobGetInput,
+  SkillMomentRunJobGetResult,
+  SkillMomentRunJobListInput,
+  SkillMomentRunJobListResult,
+  SkillMomentRunJobWaitInput,
+  SkillMomentRunJobWaitResult,
   SkillMomentRunStatusEvent,
+  SkillMomentShowFeedbackCalibration,
+  SkillMomentShowEvaluation,
+  SkillMomentShowEvaluationMetric,
   SkillMomentSkillInput,
+  SkillMomentStageControl,
+  SkillMomentStageControlLevel,
+  SkillMomentStageHumanGate,
+  SkillMomentStageMediaPolicy,
+  SkillMomentStageSceneType,
   SkillMomentSourceDigest,
 } from '@craft-agent/shared/skill-moments';
 export type {
   SkillFeedbackVerdict,
   SkillMoment,
   SkillMomentCritique,
+  SkillMomentActorIntentCard,
+  SkillMomentDemoContract,
   SkillMomentExecutionMode,
   SkillMomentEvolutionCandidate,
   SkillMomentEvolutionCandidateListInput,
@@ -103,9 +122,26 @@ export type {
   SkillMomentReaction,
   SkillMomentRunCycleInput,
   SkillMomentRunCycleResult,
+  SkillMomentRunJobAudit,
+  SkillMomentRunJobFailure,
+  SkillMomentRunJobGetInput,
+  SkillMomentRunJobGetResult,
+  SkillMomentRunJobListInput,
+  SkillMomentRunJobListResult,
+  SkillMomentRunJobState,
+  SkillMomentRunJobWaitInput,
+  SkillMomentRunJobWaitResult,
   SkillMomentRunStatusEvent,
   SkillMomentRunStatusPhase,
+  SkillMomentShowFeedbackCalibration,
+  SkillMomentShowEvaluation,
+  SkillMomentShowEvaluationMetric,
   SkillMomentSkillInput,
+  SkillMomentStageControl,
+  SkillMomentStageControlLevel,
+  SkillMomentStageHumanGate,
+  SkillMomentStageMediaPolicy,
+  SkillMomentStageSceneType,
   SkillMomentSourceDigest,
   SkillMomentSourceKind,
 } from '@craft-agent/shared/skill-moments';
@@ -792,6 +828,9 @@ export interface ElectronAPI {
   recordSkillFeedback(args: SkillFeedbackRecordInput): Promise<SkillFeedbackRecordResult>
   listSkillMoments(args: SkillMomentListInput): Promise<SkillMomentListResult>
   runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<SkillMomentRunCycleResult>
+  getSkillMomentRunJob(args: SkillMomentRunJobGetInput): Promise<SkillMomentRunJobGetResult>
+  listSkillMomentRunJobs(args: SkillMomentRunJobListInput): Promise<SkillMomentRunJobListResult>
+  waitSkillMomentRunJob(args: SkillMomentRunJobWaitInput): Promise<SkillMomentRunJobWaitResult>
   onSkillMomentRunStatus(callback: (event: SkillMomentRunStatusEvent) => void): () => void
   recordSkillMomentFeedback(args: SkillMomentFeedbackRecordInput): Promise<SkillMomentFeedbackRecordResult>
   listSkillMomentEvolutionCandidates(args: SkillMomentEvolutionCandidateListInput): Promise<SkillMomentEvolutionCandidateListResult>

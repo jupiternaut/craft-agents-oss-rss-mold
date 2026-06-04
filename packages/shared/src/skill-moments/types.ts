@@ -83,11 +83,112 @@ export type SkillMomentListResult = {
 
 export type SkillMomentExecutionMode = 'mock' | 'real'
 
+export type SkillMomentStageControlLevel = 'human_locked' | 'human_guided' | 'free_actor'
+
+export type SkillMomentStageSceneType = 'friend_circle' | 'tavern' | 'edict_council' | 'screenplay'
+
+export type SkillMomentStageMediaPolicy =
+  | 'disabled'
+  | 'allow_one_image_if_author_requests'
+  | 'allow_actor_requested_images'
+
+export type SkillMomentStageHumanGate = 'before_persist' | 'draft_only' | 'none'
+
+export type SkillMomentStageControl = {
+  schemaVersion?: 1
+  stageId?: string
+  controlLevel?: SkillMomentStageControlLevel
+  sceneType?: SkillMomentStageSceneType
+  directorCommand: string
+  activeCast?: string[]
+  speakerOrder?: string[]
+  conflictTarget?: string
+  mediaPolicy?: SkillMomentStageMediaPolicy
+  humanGate?: SkillMomentStageHumanGate
+  maxMoments?: number
+  maxCriticsPerMoment?: number
+}
+
+export type SkillMomentShowEvaluationMetric = {
+  score: number
+  summary: string
+  evidence: string[]
+}
+
+export type SkillMomentShowFeedbackCalibration = {
+  schemaVersion: 1
+  method: 'heuristic_feedback_adjustment'
+  roomId: string
+  baseScore: number
+  adjustedScore: number
+  adjustment: number
+  counts: {
+    evolve: number
+    unchanged: number
+    regress: number
+    total: number
+  }
+  sampleWindow: number
+  source: 'skill_moments_feedback_jsonl'
+  sourcePath?: string
+  latestRecordedAt?: string
+  reason: string
+}
+
+export type SkillMomentShowEvaluation = {
+  schemaVersion: 1
+  overallScore: number
+  repetition: SkillMomentShowEvaluationMetric
+  conflictStrength: SkillMomentShowEvaluationMetric
+  visuality: SkillMomentShowEvaluationMetric
+  actorParticipation: SkillMomentShowEvaluationMetric
+  mediaMissingRisk: SkillMomentShowEvaluationMetric
+  feedbackCalibration?: SkillMomentShowFeedbackCalibration
+  notes: string[]
+}
+
+export type SkillMomentDemoContract = {
+  schemaVersion: 1
+  title: string
+  scene: SkillMomentStageSceneType
+  conflict?: {
+    left: string
+    right: string
+    publicLabel?: string
+  }
+  goal: string
+  requiredBeats: string[]
+  antiRepeatRules: string[]
+  feedbackInfluence?: string
+  originalShell?: {
+    protagonist: string
+    antagonist: string
+    world: string
+  }
+}
+
+export type SkillMomentActorIntentCard = {
+  schemaVersion: 1
+  skillId: string
+  skillName: string
+  handle: string
+  slug: string
+  role: string
+  goal: string
+  memory: string
+  nextAction: string
+  target?: string
+  visibility: 'public' | 'private' | 'comment' | 'like' | 'silent'
+  mediaIntent?: boolean
+  risk?: string
+}
+
 export type SkillMomentRunCycleInput = {
   workspaceId: string
   roomId?: string
   runId?: string
   mode?: SkillMomentExecutionMode
+  stageControl?: SkillMomentStageControl
   skills?: SkillMomentSkillInput[]
   skillSlugs?: string[]
   workingDirectory?: string
@@ -98,7 +199,7 @@ export type SkillMomentRunCycleInput = {
 export type SkillMomentRunCycleResult = {
   success: boolean
   runId: string
-  state?: 'started' | 'completed'
+  state?: 'started' | 'completed' | 'failed'
   moments: SkillMoment[]
   sourceDigests: SkillMomentSourceDigest[]
   path: string
@@ -121,10 +222,86 @@ export type SkillMomentRunStatusEvent = {
   workspaceId: string
   roomId: string
   runId?: string
+  sequence?: number
   phase: SkillMomentRunStatusPhase
   message: string
   detail?: string
+  workerNarration?: string
+  failureEvidence?: string
+  domSummary?: string
+  debugUrl?: string
+  showScore?: number
+  showEvaluation?: SkillMomentShowEvaluation
+  demoContract?: SkillMomentDemoContract
+  actorIntents?: SkillMomentActorIntentCard[]
   createdAt: string
+}
+
+export type SkillMomentRunJobState = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export type SkillMomentRunJobFailure = {
+  code?: string
+  message: string
+  name?: string
+  stack?: string
+  failedAt: string
+  event: SkillMomentRunStatusEvent
+}
+
+export type SkillMomentRunJobRecovery = {
+  code: 'recovered_without_executor' | 'restarted_from_audit'
+  source: 'run-jobs.jsonl'
+  recoveredAt: string
+  previousState: SkillMomentRunJobState
+  message: string
+}
+
+export type SkillMomentRunJobAudit = {
+  runId: string
+  workspaceId: string
+  roomId: string
+  state: SkillMomentRunJobState
+  startedAt: string
+  input?: SkillMomentRunCycleInput
+  endedAt?: string
+  result?: SkillMomentRunCycleResult
+  error?: string
+  failure?: SkillMomentRunJobFailure
+  recovered?: boolean
+  recovery?: SkillMomentRunJobRecovery
+  eventCount: number
+  droppedEventCount: number
+  lastEvent?: SkillMomentRunStatusEvent
+  events: SkillMomentRunStatusEvent[]
+}
+
+export type SkillMomentRunJobGetInput = {
+  workspaceId: string
+  runId: string
+}
+
+export type SkillMomentRunJobListInput = {
+  workspaceId: string
+  roomId?: string
+  limit?: number
+}
+
+export type SkillMomentRunJobWaitInput = {
+  workspaceId: string
+  runId: string
+  timeoutMs?: number
+}
+
+export type SkillMomentRunJobGetResult = {
+  job?: SkillMomentRunJobAudit
+}
+
+export type SkillMomentRunJobListResult = {
+  jobs: SkillMomentRunJobAudit[]
+}
+
+export type SkillMomentRunJobWaitResult = {
+  job: SkillMomentRunJobAudit
 }
 
 export type SkillMomentFeedbackRecordInput = {

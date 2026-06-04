@@ -272,6 +272,9 @@ export const RPC_CHANNELS = {
   skillMoments: {
     LIST: 'skill-moments:list',
     RUN_CYCLE: 'skill-moments:run-cycle',
+    GET_RUN_JOB: 'skill-moments:get-run-job',
+    LIST_RUN_JOBS: 'skill-moments:list-run-jobs',
+    WAIT_RUN_JOB: 'skill-moments:wait-run-job',
     RUN_STATUS: 'skill-moments:run-status',
     RECORD_FEEDBACK: 'skill-moments:record-feedback',
     LIST_EVOLUTION_CANDIDATES: 'skill-moments:list-evolution-candidates',

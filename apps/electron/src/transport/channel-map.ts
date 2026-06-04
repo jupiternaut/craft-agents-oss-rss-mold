@@ -241,6 +241,9 @@ export const CHANNEL_MAP = {
   // Skill Moments feed/job paths.
   listSkillMoments: invoke(RPC_CHANNELS.skillMoments.LIST),
   runSkillMomentCycle: invoke(RPC_CHANNELS.skillMoments.RUN_CYCLE),
+  getSkillMomentRunJob: invoke(RPC_CHANNELS.skillMoments.GET_RUN_JOB),
+  listSkillMomentRunJobs: invoke(RPC_CHANNELS.skillMoments.LIST_RUN_JOBS),
+  waitSkillMomentRunJob: invoke(RPC_CHANNELS.skillMoments.WAIT_RUN_JOB),
   onSkillMomentRunStatus: listener(RPC_CHANNELS.skillMoments.RUN_STATUS),
   recordSkillMomentFeedback: invoke(RPC_CHANNELS.skillMoments.RECORD_FEEDBACK),
   listSkillMomentEvolutionCandidates: invoke(RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES),

@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { agentOSBrowserUseRunnerTestables } from '../agentos-browser-use-runner'
+import { createAgentOSBrowserWorkerService } from '../agentos-browser-worker'
+import { agentOSBrowserUseRunnerTestables, runAgentOSBraveChatGptImageE2E, runAgentOSBraveChatGptSmoke } from '../agentos-browser-use-runner'
 
 const originalFetch = globalThis.fetch
 const DOM_GLOBALS = ['document', 'HTMLElement', 'HTMLTextAreaElement', 'HTMLButtonElement', 'InputEvent', 'getComputedStyle', 'location'] as const
+const tempDirs: string[] = []
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
 type FakeRect = {
@@ -14,6 +20,20 @@ type FakeRect = {
   y: number
   width: number
   height: number
+}
+
+type TestChatGptPromptState = {
+  url: string
+  title: string
+  hasPrompt: boolean
+  visiblePrompt: boolean
+  inputTextLength: number
+  promptSelector?: string
+  hasSubmit?: boolean
+  visibleSubmit?: boolean
+  submitDisabled?: boolean
+  submitSelector?: string
+  diagnostics: string
 }
 
 class FakeHTMLElement {
@@ -287,9 +307,13 @@ describe('AgentOS Brave ChatGPT runner', () => {
     const targetState = evaluateChatGptExpression<{
       visiblePrompt?: boolean
       promptSelector?: string
+      visibleSubmit?: boolean
+      submitSelector?: string
     }>(agentOSBrowserUseRunnerTestables.chatGptTargetStateExpression(), document)
     expect(targetState.visiblePrompt).toBe(true)
     expect(targetState.promptSelector).toBe('.ProseMirror[contenteditable="true"]')
+    expect(targetState.visibleSubmit).toBe(true)
+    expect(targetState.submitSelector).toBe('[data-testid="send-button"]')
 
     const prompt = 'Create an image of a fictional skyline.'
     const insertedLength = evaluateChatGptExpression<number>(
@@ -309,5 +333,320 @@ describe('AgentOS Brave ChatGPT runner', () => {
 
     expect(evaluateChatGptExpression<string>(agentOSBrowserUseRunnerTestables.chatGptSubmitExpression(), document)).toBe('https://chatgpt.com/')
     expect(sendButton.clicked).toBe(true)
+  })
+
+  it('maps missing ChatGPT input and submit diagnostics into worker snapshot fields', () => {
+    const document = new FakeDocument([], 'ChatGPT')
+    document.body.innerText = 'Sign in to ChatGPT before sending a message'
+
+    const targetState = evaluateChatGptExpression<TestChatGptPromptState>(
+      agentOSBrowserUseRunnerTestables.chatGptTargetStateExpression(),
+      document,
+    )
+    expect(targetState.hasPrompt).toBe(false)
+    expect(targetState.visiblePrompt).toBe(false)
+    expect(targetState.hasSubmit).toBe(false)
+    expect(targetState.visibleSubmit).toBe(false)
+    expect(targetState.diagnostics).toContain('promptMatches=0')
+
+    const snapshot = agentOSBrowserUseRunnerTestables.snapshotFromChatGptPromptState(targetState)
+    expect(snapshot?.chatgpt?.inputFound).toBe(false)
+    expect(snapshot?.chatgpt?.inputVisible).toBe(false)
+    expect(snapshot?.chatgpt?.submitFound).toBe(false)
+    expect(snapshot?.chatgpt?.submitVisible).toBe(false)
+    expect(snapshot?.chatgpt?.diagnostics).toContain('sendButtons=0')
+
+    const failureSnapshot = agentOSBrowserUseRunnerTestables.snapshotFromChatGptPromptFailure(
+      new Error(`ChatGPT prompt input not found; ${targetState.diagnostics}`),
+      'https://chatgpt.com/',
+    )
+    expect(failureSnapshot.chatgpt?.url).toBe('https://chatgpt.com/')
+    expect(failureSnapshot.chatgpt?.inputFound).toBe(false)
+    expect(failureSnapshot.chatgpt?.inputVisible).toBe(false)
+    expect(failureSnapshot.chatgpt?.diagnostics).toContain('ChatGPT prompt input not found')
+  })
+
+  it('marks a missing or blocked ChatGPT submit button in failure snapshots', () => {
+    const failureSnapshot = agentOSBrowserUseRunnerTestables.snapshotFromChatGptPromptFailure(
+      new Error('ChatGPT send button is not ready; promptMatches=1; visibleEditable=1; sendButtons=0'),
+      'https://chatgpt.com/',
+    )
+
+    expect(failureSnapshot.chatgpt?.submitFound).toBe(false)
+    expect(failureSnapshot.chatgpt?.submitVisible).toBe(false)
+    expect(failureSnapshot.chatgpt?.submitDisabled).toBe(true)
+    expect(failureSnapshot.chatgpt?.diagnostics).toContain('sendButtons=0')
+  })
+
+  it('records a successful Brave CDP smoke snapshot', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'agentos-browser-smoke-'))
+    tempDirs.push(storageDir)
+    const worker = createAgentOSBrowserWorkerService({
+      storageDir,
+      enableHttp: false,
+    })
+
+    const result = await runAgentOSBraveChatGptSmoke({
+      port: 9233,
+      runId: 'smoke-ok',
+      dependencies: {
+        worker,
+        listTargets: async () => [{
+          id: 'chatgpt-target',
+          title: 'ChatGPT',
+          type: 'page',
+          url: 'https://chatgpt.com/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:9233/devtools/page/chatgpt-target',
+        }],
+        inspectTarget: async () => ({
+          url: 'https://chatgpt.com/',
+          title: 'ChatGPT',
+          hasPrompt: true,
+          visiblePrompt: true,
+          inputTextLength: 0,
+          promptSelector: '#prompt-textarea',
+          hasSubmit: true,
+          visibleSubmit: true,
+          submitDisabled: true,
+          submitSelector: '#composer-submit-button',
+          diagnostics: 'url=https://chatgpt.com/; title=ChatGPT; promptMatches=1; visibleEditable=1; sendButtons=1',
+        }),
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.target?.id).toBe('chatgpt-target')
+    expect(result.chatgpt?.loginState).toBe('ready')
+    expect(result.chatgpt?.promptSelector).toBe('#prompt-textarea')
+    expect(result.chatgpt?.submitSelector).toBe('#composer-submit-button')
+
+    const status = JSON.parse(await readFile(join(storageDir, 'latest-status.json'), 'utf-8'))
+    expect(status.current.snapshot.chatgpt.loginState).toBe('ready')
+    expect(status.current.snapshot.chatgpt.submitDisabled).toBe(true)
+
+    const log = await readFile(join(storageDir, 'diagnostic-log.jsonl'), 'utf-8')
+    expect(log).toContain('"phase":"browser_smoke"')
+    expect(log).toContain('"status":"ok"')
+  })
+
+  it('keeps smoke default read-only and does not call E2E submit dependencies', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'agentos-browser-smoke-'))
+    tempDirs.push(storageDir)
+    const worker = createAgentOSBrowserWorkerService({
+      storageDir,
+      enableHttp: false,
+    })
+    const calls: string[] = []
+
+    const result = await runAgentOSBraveChatGptSmoke({
+      port: 9233,
+      runId: 'smoke-read-only',
+      dependencies: {
+        worker,
+        listTargets: async () => [{
+          id: 'chatgpt-target',
+          title: 'ChatGPT',
+          type: 'page',
+          url: 'https://chatgpt.com/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:9233/devtools/page/chatgpt-target',
+        }],
+        inspectTarget: async () => ({
+          url: 'https://chatgpt.com/',
+          title: 'ChatGPT',
+          hasPrompt: true,
+          visiblePrompt: true,
+          inputTextLength: 0,
+          promptSelector: '#prompt-textarea',
+          hasSubmit: true,
+          visibleSubmit: true,
+          submitDisabled: false,
+          submitSelector: '[data-testid="send-button"]',
+          diagnostics: 'promptMatches=1; visibleEditable=1; sendButtons=1',
+        }),
+        submitPrompt: async () => {
+          calls.push('submit')
+          return 'https://chatgpt.com/c/should-not-happen'
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(calls).toEqual([])
+  })
+
+  it('runs explicit E2E submit, wait, and capture stages through injected dependencies', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'agentos-browser-e2e-'))
+    tempDirs.push(storageDir)
+    const worker = createAgentOSBrowserWorkerService({
+      storageDir,
+      enableHttp: false,
+    })
+    const calls: string[] = []
+
+    const result = await runAgentOSBraveChatGptImageE2E({
+      runId: 'e2e-ok',
+      port: 9233,
+      prompt: 'Create one fictional AgentOS validation image.',
+      outputPath: join(storageDir, 'image.png'),
+      submitTimeoutMs: 1_000,
+      waitForImageMs: 1_000,
+      dependencies: {
+        worker,
+        capability: {
+          enabled: true,
+          provider: 'brave',
+          browserName: 'Brave Browser',
+          executablePath: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+          profileDir: join(storageDir, 'profile'),
+          remoteDebuggingPort: 9233,
+          policy: 'read_only',
+        },
+        ensureBraveCdp: async () => {
+          calls.push('connect')
+          return 'reused'
+        },
+        submitPrompt: async () => {
+          calls.push('submit')
+          return 'https://chatgpt.com/c/e2e-ok'
+        },
+        waitForImage: async () => {
+          calls.push('wait')
+        },
+        captureImage: async () => {
+          calls.push('capture')
+          return {
+            width: 1024,
+            height: 1024,
+            method: 'brave_cdp_image_clip',
+            evidencePath: join(storageDir, 'image.evidence.json'),
+            screenshotPath: join(storageDir, 'image.evidence.png'),
+            imageCandidateCount: 2,
+          }
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(calls).toEqual(['connect', 'submit', 'wait', 'capture'])
+    expect(result.conversationUrl).toBe('https://chatgpt.com/c/e2e-ok')
+    expect(result.imagePath).toBe(join(storageDir, 'image.png'))
+    expect(result.evidencePath).toContain('image.evidence.json')
+
+    const status = JSON.parse(await readFile(join(storageDir, 'latest-status.json'), 'utf-8'))
+    expect(status.current.snapshot.chatgpt.imageFound).toBe(true)
+    expect(status.current.snapshot.chatgpt.imageCandidateCount).toBe(2)
+
+    const log = await readFile(join(storageDir, 'diagnostic-log.jsonl'), 'utf-8')
+    expect(log).toContain('"phase":"browser_connect"')
+    expect(log).toContain('"phase":"browser_input"')
+    expect(log).toContain('"phase":"browser_write"')
+    expect(log).toContain('"phase":"browser_submit"')
+    expect(log).toContain('"phase":"browser_wait"')
+    expect(log).toContain('"phase":"browser_capture"')
+    expect(log).toContain('"phase":"browser_success"')
+  })
+
+  it('records E2E timeout evidence paths when image capture fails', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'agentos-browser-e2e-'))
+    tempDirs.push(storageDir)
+    const worker = createAgentOSBrowserWorkerService({
+      storageDir,
+      enableHttp: false,
+    })
+    const evidencePath = join(storageDir, 'image.evidence.json')
+    const screenshotPath = join(storageDir, 'image.evidence.png')
+
+    const result = await runAgentOSBraveChatGptImageE2E({
+      runId: 'e2e-timeout',
+      port: 9233,
+      prompt: 'Create one fictional AgentOS validation image.',
+      outputPath: join(storageDir, 'image.png'),
+      submitTimeoutMs: 1_000,
+      waitForImageMs: 1_000,
+      dependencies: {
+        worker,
+        capability: {
+          enabled: true,
+          provider: 'brave',
+          browserName: 'Brave Browser',
+          executablePath: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+          profileDir: join(storageDir, 'profile'),
+          remoteDebuggingPort: 9233,
+          policy: 'read_only',
+        },
+        ensureBraveCdp: async () => 'reused',
+        submitPrompt: async () => 'https://chatgpt.com/c/e2e-timeout',
+        waitForImage: async () => undefined,
+        captureImage: async () => {
+          const error = new Error('Timed out waiting for ChatGPT image') as Error & {
+            evidencePath?: string
+            screenshotPath?: string
+            domSummary?: string
+            imageCandidateCount?: number
+          }
+          error.evidencePath = evidencePath
+          error.screenshotPath = screenshotPath
+          error.domSummary = 'url=https://chatgpt.com/c/e2e-timeout; imageCandidates=0; body=Still generating'
+          error.imageCandidateCount = 0
+          throw error
+        },
+      },
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Timed out waiting for ChatGPT image')
+    expect(result.evidencePath).toBe(evidencePath)
+    expect(result.screenshotPath).toBe(screenshotPath)
+    expect(result.imageCandidateCount).toBe(0)
+
+    const status = JSON.parse(await readFile(join(storageDir, 'latest-status.json'), 'utf-8'))
+    expect(status.current.snapshot.chatgpt.evidencePath).toBe(evidencePath)
+    expect(status.current.snapshot.chatgpt.screenshotPath).toBe(screenshotPath)
+    expect(status.current.snapshot.chatgpt.diagnostics).toContain('imageCandidates=0')
+
+    const log = await readFile(join(storageDir, 'diagnostic-log.jsonl'), 'utf-8')
+    expect(log).toContain('"phase":"browser_failure"')
+    expect(log).toContain('image.evidence.json')
+  })
+
+  it('fails smoke with explicit evidence when no ChatGPT CDP target exists', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'agentos-browser-smoke-'))
+    tempDirs.push(storageDir)
+    const worker = createAgentOSBrowserWorkerService({
+      storageDir,
+      enableHttp: false,
+    })
+
+    const result = await runAgentOSBraveChatGptSmoke({
+      port: 9233,
+      runId: 'smoke-no-target',
+      dependencies: {
+        worker,
+        listTargets: async () => [{
+          id: 'example-target',
+          title: 'Example',
+          type: 'page',
+          url: 'https://example.com/',
+          webSocketDebuggerUrl: 'ws://127.0.0.1:9233/devtools/page/example-target',
+        }],
+        inspectTarget: async () => {
+          throw new Error('inspectTarget should not be called without a ChatGPT target')
+        },
+      },
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('No ChatGPT page target found')
+    expect(result.diagnostics).toContain('Example <https://example.com/')
+    expect(result.chatgpt?.inputFound).toBe(false)
+    expect(result.chatgpt?.submitFound).toBe(false)
+
+    const status = JSON.parse(await readFile(join(storageDir, 'latest-status.json'), 'utf-8'))
+    expect(status.current.snapshot.chatgpt.diagnostics).toContain('No ChatGPT page target found')
+    expect(status.current.snapshot.chatgpt.inputFound).toBe(false)
+
+    const log = await readFile(join(storageDir, 'diagnostic-log.jsonl'), 'utf-8')
+    expect(log).toContain('"phase":"browser_smoke"')
+    expect(log).toContain('No ChatGPT page target found')
   })
 })

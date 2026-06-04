@@ -24,7 +24,19 @@ import { SkillMomentsView, type SkillMomentFeedbackTarget } from '@/components/s
 import { feedbackTargetKey } from '@/components/skill-crew/moments/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
-import type { LoadedSkill, SkillFeedbackVerdict, SkillMoment, SkillMomentRunStatusEvent } from '../../shared/types'
+import { RPC_CHANNELS } from '../../shared/types'
+import type {
+  LoadedSkill,
+  SkillFeedbackVerdict,
+  SkillMoment,
+  SkillMomentActorIntentCard,
+  SkillMomentDemoContract,
+  SkillMomentRunJobAudit,
+  SkillMomentRunStatusEvent,
+  SkillMomentShowEvaluation,
+  SkillMomentShowEvaluationMetric,
+  SkillMomentStageControl,
+} from '../../shared/types'
 import {
   DEFAULT_SKILL_CREW_ROOMS,
   GLOBAL_SKILL_CREW_ROOM,
@@ -184,6 +196,285 @@ function formatSkillMomentRunPhase(phase: SkillMomentRunStatusEvent['phase']): s
     error: '失败',
   }
   return labels[phase]
+}
+
+type SkillMomentShowEvaluationMetricKey =
+  | 'repetition'
+  | 'conflictStrength'
+  | 'visuality'
+  | 'actorParticipation'
+  | 'mediaMissingRisk'
+
+const showEvaluationMetricRows: Array<{
+  key: SkillMomentShowEvaluationMetricKey
+  label: string
+  badWhenHigh?: boolean
+}> = [
+  { key: 'repetition', label: '重复度', badWhenHigh: true },
+  { key: 'conflictStrength', label: '冲突' },
+  { key: 'visuality', label: '画面' },
+  { key: 'actorParticipation', label: '参与' },
+  { key: 'mediaMissingRisk', label: '缺图风险', badWhenHigh: true },
+]
+
+function normalizeShowScore(value?: number): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+
+  return Math.round(Math.max(0, Math.min(1, value)) * 100)
+}
+
+function showMetricTone(metric: SkillMomentShowEvaluationMetric, badWhenHigh?: boolean): string {
+  if (badWhenHigh) {
+    if (metric.score >= 0.55) return 'text-destructive'
+    if (metric.score >= 0.25) return 'text-amber-700 dark:text-amber-300'
+    return 'text-emerald-700 dark:text-emerald-300'
+  }
+
+  if (metric.score >= 0.7) return 'text-emerald-700 dark:text-emerald-300'
+  if (metric.score >= 0.4) return 'text-amber-700 dark:text-amber-300'
+  return 'text-muted-foreground'
+}
+
+function compactShowSummary(summary: string): string {
+  return summary.length > 28 ? `${summary.slice(0, 28)}...` : summary
+}
+
+function formatShowCalibrationAdjustment(value: number): string {
+  const points = Math.round(value * 100)
+  if (points > 0) return `+${points}`
+  return String(points)
+}
+
+function SkillMomentShowScorePanel({
+  score,
+  evaluation,
+}: {
+  score?: number
+  evaluation?: SkillMomentShowEvaluation
+}) {
+  const overall = normalizeShowScore(score ?? evaluation?.overallScore)
+  const calibration = evaluation?.feedbackCalibration
+  if (overall === undefined && !evaluation) {
+    return null
+  }
+
+  return (
+    <div className="mt-1 rounded-[6px] border border-border/60 bg-foreground/[0.025] px-2 py-2">
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="font-medium text-foreground">节目效果</span>
+        {overall !== undefined ? (
+          <span className="ml-auto rounded-[5px] bg-foreground/[0.07] px-1.5 py-0.5 font-medium text-foreground">
+            {overall}分
+          </span>
+        ) : null}
+      </div>
+      {evaluation ? (
+        <div className="mt-1 space-y-1">
+          {showEvaluationMetricRows.map((row) => {
+            const metric = evaluation[row.key]
+            const metricScore = normalizeShowScore(metric.score)
+            return (
+              <div key={row.key} className="min-w-0 rounded-[5px] bg-background/65 px-1.5 py-1">
+                <div className="flex items-center gap-2 text-[11px] leading-4">
+                  <span className="shrink-0 text-muted-foreground">{row.label}</span>
+                  <span className={cn('ml-auto font-medium', showMetricTone(metric, row.badWhenHigh))}>
+                    {metricScore ?? '--'}
+                  </span>
+                </div>
+                <div className="truncate text-[11px] leading-4 text-muted-foreground" title={metric.summary}>
+                  {compactShowSummary(metric.summary)}
+                </div>
+              </div>
+            )
+          })}
+          {calibration ? (
+            <div className="min-w-0 rounded-[5px] bg-background/65 px-1.5 py-1" title={calibration.reason}>
+              <div className="flex items-center gap-2 text-[11px] leading-4">
+                <span className="shrink-0 text-muted-foreground">反馈校准</span>
+                <span className={cn(
+                  'ml-auto font-medium',
+                  calibration.adjustment > 0
+                    ? 'text-emerald-700 dark:text-emerald-300'
+                    : calibration.adjustment < 0
+                      ? 'text-destructive'
+                      : 'text-muted-foreground',
+                )}>
+                  {formatShowCalibrationAdjustment(calibration.adjustment)}
+                </span>
+              </div>
+              <div className="truncate text-[11px] leading-4 text-muted-foreground">
+                进化 {calibration.counts.evolve} / 不变 {calibration.counts.unchanged} / 退化 {calibration.counts.regress}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function compactDirectorText(text: string, limit = 42): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  return normalized.length > limit ? `${normalized.slice(0, limit - 2)}...` : normalized
+}
+
+function formatIntentVisibility(value: SkillMomentActorIntentCard['visibility']): string {
+  const labels: Record<SkillMomentActorIntentCard['visibility'], string> = {
+    public: '公开',
+    private: '仅可见',
+    comment: '评论',
+    like: '点赞',
+    silent: '沉默',
+  }
+  return labels[value]
+}
+
+function SkillMomentDirectorPanel({
+  contract,
+  actorIntents,
+}: {
+  contract?: SkillMomentDemoContract
+  actorIntents?: SkillMomentActorIntentCard[]
+}) {
+  if (!contract && (!actorIntents || actorIntents.length === 0)) {
+    return null
+  }
+
+  const visibleIntents = (actorIntents ?? []).slice(0, 6)
+
+  return (
+    <div className="mt-3 rounded-[7px] border border-border/60 bg-background/75 px-2.5 py-2">
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="font-medium text-foreground">导演台</span>
+        {contract?.conflict?.publicLabel ? (
+          <span className="ml-auto truncate rounded-[5px] bg-foreground/[0.06] px-1.5 py-0.5 text-muted-foreground">
+            {contract.conflict.publicLabel}
+          </span>
+        ) : null}
+      </div>
+      {contract?.goal ? (
+        <div className="mt-1 text-[11px] leading-4 text-foreground/85" title={contract.goal}>
+          {compactDirectorText(contract.goal, 64)}
+        </div>
+      ) : null}
+      {contract?.feedbackInfluence ? (
+        <div className="mt-1 rounded-[5px] bg-amber-500/10 px-1.5 py-1 text-[11px] leading-4 text-amber-800 dark:text-amber-300">
+          {compactDirectorText(contract.feedbackInfluence, 70)}
+        </div>
+      ) : null}
+      {contract?.requiredBeats?.length ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {contract.requiredBeats.slice(0, 4).map((beat) => (
+            <span key={beat} className="rounded-[5px] bg-foreground/[0.05] px-1.5 py-0.5 text-[10px] text-muted-foreground" title={beat}>
+              {compactDirectorText(beat, 14)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {visibleIntents.length > 0 ? (
+        <div className="mt-2 space-y-1">
+          {visibleIntents.map((intent) => (
+            <div key={intent.skillId} className="min-w-0 rounded-[6px] bg-foreground/[0.025] px-1.5 py-1">
+              <div className="flex items-center gap-1.5 text-[11px] leading-4">
+                <span className="truncate font-medium text-foreground">{intent.skillName}</span>
+                <span className="shrink-0 text-muted-foreground">{formatIntentVisibility(intent.visibility)}</span>
+                {intent.mediaIntent ? (
+                  <span className="shrink-0 rounded-[4px] bg-emerald-500/10 px-1 text-emerald-700 dark:text-emerald-300">图</span>
+                ) : null}
+              </div>
+              <div className="truncate text-[11px] leading-4 text-muted-foreground" title={intent.goal}>
+                {intent.role}：{intent.goal}
+              </div>
+              <div className="truncate text-[11px] leading-4 text-foreground/80" title={intent.nextAction}>
+                下一步：{intent.nextAction}
+              </div>
+              <div className="truncate text-[11px] leading-4 text-muted-foreground" title={intent.memory}>
+                记忆：{intent.memory}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {contract?.antiRepeatRules?.length ? (
+        <div className="mt-2 truncate text-[11px] leading-4 text-muted-foreground" title={contract.antiRepeatRules.join('；')}>
+          禁复读：{contract.antiRepeatRules[0]}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function formatSkillMomentRunJobState(state: SkillMomentRunJobAudit['state']): string {
+  const labels: Record<SkillMomentRunJobAudit['state'], string> = {
+    queued: '排队',
+    running: '运行',
+    succeeded: '完成',
+    failed: '失败',
+  }
+  return labels[state]
+}
+
+function skillMomentRunJobStateClass(state: SkillMomentRunJobAudit['state']): string {
+  if (state === 'failed') return 'bg-destructive/10 text-destructive'
+  if (state === 'succeeded') return 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
+  if (state === 'running') return 'bg-amber-500/12 text-amber-700 dark:text-amber-300'
+  return 'bg-foreground/[0.06] text-muted-foreground'
+}
+
+function shortRunId(runId: string): string {
+  return runId.length > 10 ? runId.slice(-10) : runId
+}
+
+function SkillMomentRunJobAuditPanel({
+  jobs,
+  loading,
+}: {
+  jobs: SkillMomentRunJobAudit[]
+  loading: boolean
+}) {
+  if (jobs.length === 0 && !loading) {
+    return null
+  }
+
+  return (
+    <div className="mt-3 border-t border-border/60 pt-3">
+      <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
+        最近 job
+        {loading ? <span className="ml-auto font-normal">同步中</span> : null}
+      </div>
+      <div className="mt-1 space-y-1.5">
+        {jobs.slice(0, 3).map((job) => {
+          const failure = job.failure?.message ?? job.error
+          return (
+            <div key={job.runId} className="rounded-[7px] bg-background/70 px-2 py-2">
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className={cn('rounded-[5px] px-1.5 py-0.5', skillMomentRunJobStateClass(job.state))}>
+                  {formatSkillMomentRunJobState(job.state)}
+                </span>
+                <span className="min-w-0 truncate text-muted-foreground">#{shortRunId(job.runId)}</span>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
+                <span>事件 {job.eventCount}</span>
+                <span>丢弃 {job.droppedEventCount}</span>
+              </div>
+              {failure ? (
+                <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-destructive">
+                  失败: {failure}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+        {jobs.length === 0 && loading ? (
+          <div className="rounded-[7px] bg-background/70 px-2 py-2 text-[11px] text-muted-foreground">
+            读取 job...
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
 }
 
 function buildRoles(skills: LoadedSkill[]): CrewRole[] {
@@ -645,6 +936,8 @@ export default function SkillCrewPage() {
   const [skillMomentsRunning, setSkillMomentsRunning] = React.useState(false)
   const [skillMomentsLastRunPath, setSkillMomentsLastRunPath] = React.useState<string | undefined>()
   const [skillMomentRunStatuses, setSkillMomentRunStatuses] = React.useState<SkillMomentRunStatusEvent[]>([])
+  const [skillMomentRunJobs, setSkillMomentRunJobs] = React.useState<SkillMomentRunJobAudit[]>([])
+  const [skillMomentRunJobsLoading, setSkillMomentRunJobsLoading] = React.useState(false)
   const [skillMomentFeedbackPendingKey, setSkillMomentFeedbackPendingKey] = React.useState<string | undefined>()
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0]
   const messages = activeBranch?.messages ?? []
@@ -831,16 +1124,49 @@ export default function SkillCrewPage() {
     }
   }, [activeChannel, activeWorkspaceId])
 
+  const loadSkillMomentRunJobs = React.useCallback(async () => {
+    if (!activeWorkspaceId) {
+      setSkillMomentRunJobs([])
+      setSkillMomentRunJobsLoading(false)
+      return
+    }
+
+    const canListJobs = typeof window.electronAPI.listSkillMomentRunJobs === 'function'
+      && window.electronAPI.isChannelAvailable(RPC_CHANNELS.skillMoments.LIST_RUN_JOBS)
+    if (!canListJobs) {
+      setSkillMomentRunJobs([])
+      setSkillMomentRunJobsLoading(false)
+      return
+    }
+
+    setSkillMomentRunJobsLoading(true)
+    try {
+      const result = await window.electronAPI.listSkillMomentRunJobs({
+        workspaceId: activeWorkspaceId,
+        roomId: activeChannel,
+        limit: 3,
+      })
+      setSkillMomentRunJobs(result.jobs)
+    } catch (error) {
+      setSkillMomentRunJobs([])
+      console.warn('[SkillCrew] Failed to load Skill Moment run jobs', error)
+    } finally {
+      setSkillMomentRunJobsLoading(false)
+    }
+  }, [activeChannel, activeWorkspaceId])
+
   React.useEffect(() => {
     if (activeCrewSurface === 'chat') {
       return
     }
 
     void loadSkillMoments()
-  }, [activeCrewSurface, loadSkillMoments])
+    void loadSkillMomentRunJobs()
+  }, [activeCrewSurface, loadSkillMomentRunJobs, loadSkillMoments])
 
   React.useEffect(() => {
     setSkillMomentRunStatuses([])
+    setSkillMomentRunJobs([])
   }, [activeChannel, activeWorkspaceId])
 
   React.useEffect(() => {
@@ -849,24 +1175,28 @@ export default function SkillCrewPage() {
       const isActiveRun = !!event.runId && activeRun?.runId === event.runId
       const isVisibleRoom = event.workspaceId === activeWorkspaceId && event.roomId === activeChannel
       if (isVisibleRoom) {
-        setSkillMomentRunStatuses((current) => [event, ...current].slice(0, 8))
+        setSkillMomentRunStatuses((current) => [event, ...current].slice(0, 16))
       }
       if (isActiveRun && event.phase === 'complete') {
         activeSkillMomentRunRef.current = null
         setSkillMomentsRunning(false)
         if (isVisibleRoom) {
           void loadSkillMoments()
+          void loadSkillMomentRunJobs()
         }
       }
       if (isActiveRun && event.phase === 'error') {
         activeSkillMomentRunRef.current = null
         setSkillMomentsRunning(false)
+        if (isVisibleRoom) {
+          void loadSkillMomentRunJobs()
+        }
       }
     })
     return () => unsubscribe?.()
-  }, [activeChannel, activeWorkspaceId, loadSkillMoments])
+  }, [activeChannel, activeWorkspaceId, loadSkillMomentRunJobs, loadSkillMoments])
 
-  const runSkillMomentCycle = React.useCallback(async () => {
+  const runSkillMomentCycle = React.useCallback(async (stageControl?: SkillMomentStageControl) => {
     if (!activeWorkspaceId || skillMomentsRunning) {
       return
     }
@@ -907,8 +1237,10 @@ export default function SkillCrewPage() {
       workspaceId: activeWorkspaceId,
       roomId: activeChannel,
       phase: 'planning',
-      message: '收到刷新朋友圈命令',
-      detail: activeChannel === 'debate'
+      message: stageControl ? '收到导演控场命令' : '收到生成一轮命令',
+      detail: stageControl
+        ? stageControl.directorCommand
+        : activeChannel === 'debate'
         ? '先规划角色和舞台冲突；如祖国人需要配图，再准备提示词并打开 Brave。'
         : '先规划本轮 screenplay 房间产物。',
       createdAt: new Date().toISOString(),
@@ -926,7 +1258,8 @@ export default function SkillCrewPage() {
         workspaceId: activeWorkspaceId,
         roomId: activeChannel,
         runId: clientRunId,
-        maxMoments: activeChannel === 'screenplay' ? 6 : 5,
+        maxMoments: stageControl ? undefined : activeChannel === 'screenplay' ? 6 : 5,
+        stageControl,
         skills: cycleRoles.map((role) => ({
           id: role.id,
           name: role.name,
@@ -935,6 +1268,7 @@ export default function SkillCrewPage() {
         })),
       })
       setSkillMomentsLastRunPath(result.path)
+      void loadSkillMomentRunJobs()
       if (result.state === 'started') {
         waitForStatusCompletion = true
         return
@@ -952,16 +1286,17 @@ export default function SkillCrewPage() {
         activeSkillMomentRunRef.current = null
       }
       console.warn('[SkillCrew] Failed to run Skill Moments cycle', error)
+      void loadSkillMomentRunJobs()
       const failureStatus: SkillMomentRunStatusEvent = {
         workspaceId: activeWorkspaceId,
         roomId: activeChannel,
         runId: clientRunId,
         phase: 'error',
-        message: '刷新朋友圈失败',
+        message: '生成一轮失败',
         detail: error instanceof Error ? error.message : String(error),
         createdAt: new Date().toISOString(),
       }
-      setSkillMomentRunStatuses((current) => [failureStatus, ...current].slice(0, 8))
+      setSkillMomentRunStatuses((current) => [failureStatus, ...current].slice(0, 16))
     } finally {
       if (!waitForStatusCompletion) {
         if (activeSkillMomentRunRef.current?.runId === clientRunId) {
@@ -970,7 +1305,7 @@ export default function SkillCrewPage() {
         setSkillMomentsRunning(false)
       }
     }
-  }, [activeChannel, activeWorkspaceId, mentionableRoles, skillMomentsRunning])
+  }, [activeChannel, activeWorkspaceId, loadSkillMomentRunJobs, mentionableRoles, skillMomentsRunning])
 
   const updateSkillMomentFeedback = React.useCallback((
     target: SkillMomentFeedbackTarget,
@@ -1502,6 +1837,10 @@ export default function SkillCrewPage() {
     setDraft('基于这个分支继续追问：')
   }, [branches.length, messages])
 
+  const latestDirectorStatus = skillMomentRunStatuses.find((status) => (
+    Boolean(status.demoContract) || Boolean(status.actorIntents?.length)
+  ))
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <PanelHeader
@@ -1839,14 +2178,16 @@ export default function SkillCrewPage() {
             <SkillMomentsView
               mode={activeCrewSurface}
               workspaceId={avatarWorkspaceId}
+              roomId={activeChannel}
               roomLabel={formatChannelLabel(activeChannel)}
               moments={skillMoments}
-              roles={roles}
+              roles={mentionableRoles}
               loading={skillMomentsLoading}
               running={skillMomentsRunning}
               lastRunPath={skillMomentsLastRunPath}
               pendingFeedbackKey={skillMomentFeedbackPendingKey}
-              onRefresh={() => void runSkillMomentCycle()}
+              onReload={() => void loadSkillMoments()}
+              onGenerate={(stageControl) => void runSkillMomentCycle(stageControl)}
               onFeedback={(target, verdict) => void recordSkillMomentFeedback(target, verdict)}
             />
           )}
@@ -1868,9 +2209,13 @@ export default function SkillCrewPage() {
                     {skillMomentsRunning ? 'running' : 'idle'}
                   </span>
                 </div>
+                <SkillMomentDirectorPanel
+                  contract={latestDirectorStatus?.demoContract}
+                  actorIntents={latestDirectorStatus?.actorIntents}
+                />
                 <div className="mt-2 space-y-2">
                   {skillMomentRunStatuses.length > 0 ? (
-                    skillMomentRunStatuses.slice(0, 6).map((status, index) => (
+                    skillMomentRunStatuses.slice(0, 10).map((status, index) => (
                       <div key={`${status.createdAt}-${status.phase}-${index}`} className="rounded-[7px] bg-background/70 px-2 py-2">
                         <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                           <span className={cn(
@@ -1888,17 +2233,53 @@ export default function SkillCrewPage() {
                           </span>
                         </div>
                         <div className="mt-1 text-xs leading-5 text-foreground/90">{status.message}</div>
+                        <SkillMomentShowScorePanel
+                          score={status.showScore}
+                          evaluation={status.showEvaluation}
+                        />
+                        {status.workerNarration ? (
+                          <div className="mt-1 rounded-[5px] bg-foreground/[0.035] px-1.5 py-1 text-[11px] leading-4 text-foreground/80">
+                            <span className="text-muted-foreground">旁白 </span>
+                            {status.workerNarration}
+                          </div>
+                        ) : null}
+                        {status.failureEvidence ? (
+                          <div className="mt-1 rounded-[5px] bg-destructive/5 px-1.5 py-1 text-[11px] leading-4 text-destructive">
+                            <span className="text-destructive/70">证据 </span>
+                            {status.failureEvidence}
+                          </div>
+                        ) : null}
+                        {status.domSummary ? (
+                          <div className="mt-1 break-words rounded-[5px] bg-foreground/[0.025] px-1.5 py-1 text-[11px] leading-4 text-muted-foreground">
+                            <span>DOM </span>
+                            {status.domSummary}
+                          </div>
+                        ) : null}
                         {status.detail ? (
-                          <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{status.detail}</div>
+                          <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-4 text-muted-foreground">{status.detail}</div>
+                        ) : null}
+                        {status.debugUrl ? (
+                          <a
+                            href={status.debugUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-1 block truncate text-[11px] leading-4 text-muted-foreground underline-offset-2 hover:underline"
+                          >
+                            worker status: {status.debugUrl}
+                          </a>
                         ) : null}
                       </div>
                     ))
                   ) : (
                     <div className="rounded-[7px] bg-background/70 px-2 py-2 text-xs leading-5 text-muted-foreground">
-                      点击刷新后，这里会显示角色规划、提示词准备、Brave 操作和图片捕获状态。
+                      点击生成一轮后，这里会显示角色规划、提示词准备、Brave 操作和图片捕获状态。
                     </div>
                   )}
                 </div>
+                <SkillMomentRunJobAuditPanel
+                  jobs={skillMomentRunJobs}
+                  loading={skillMomentRunJobsLoading}
+                />
               </div>
             )}
             <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3 text-sm font-medium">

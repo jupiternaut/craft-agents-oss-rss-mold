@@ -92,6 +92,7 @@ import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient } from '@craf
 import {
   listSkillMomentsForWorkspace,
   recordSkillMomentFeedbackForWorkspace,
+  skillMomentFeedbackPath,
 } from '@craft-agent/server-core/skill-moments'
 import {
   getHomelanderFallenGodScenePack,
@@ -137,7 +138,7 @@ import { FlowWatcher } from './lib/flow-watcher'
 import { showFlowNotification, initFlowNotifications } from './lib/flow-notifications'
 import { abortChat, executeChat, type RegisteredProject } from './lib/epic-chat-agent'
 import { applyPlan, executePlan, type PlanResult } from './lib/planning-agent'
-import type { CodexSkillRunResult, FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState, SkillCrewImportSkillArgs, SkillCrewImportSkillResult, SkillFeedbackRecordInput, SkillMoment, SkillMomentCritique, SkillMomentFeedbackRecordInput, SkillMomentListInput, SkillMomentMedia, SkillMomentReaction, SkillMomentRunCycleInput, SkillMomentRunCycleResult, SkillMomentRunStatusEvent, SkillMomentSkillInput, SkillMomentSourceDigest } from '../shared/types'
+import type { CodexSkillRunResult, FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState, SkillCrewImportSkillArgs, SkillCrewImportSkillResult, SkillFeedbackRecordInput, SkillMoment, SkillMomentActorIntentCard, SkillMomentCritique, SkillMomentDemoContract, SkillMomentFeedbackRecordInput, SkillMomentListInput, SkillMomentMedia, SkillMomentReaction, SkillMomentRunCycleInput, SkillMomentRunCycleResult, SkillMomentRunStatusEvent, SkillMomentShowEvaluation, SkillMomentShowEvaluationMetric, SkillMomentShowFeedbackCalibration, SkillMomentSkillInput, SkillMomentSourceDigest, SkillMomentStageControl } from '../shared/types'
 import type { TaskStatus } from '../shared/flow-schemas'
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
@@ -148,6 +149,15 @@ import {
   buildSkillActorMemoryRecords,
   type SkillActorMemoryRecord,
 } from './skill-crew/skill-actor-memory'
+import type { SkillActorDecisionTrace, SkillActorStateUpdate } from './skill-crew/skill-actor-runtime'
+import {
+  applySkillMomentShowFeedbackCalibration,
+  buildSkillMomentShowFeedbackCalibration,
+} from './skill-crew/show-score-calibration'
+import {
+  buildSkillMomentActorIntentCards,
+  buildSkillMomentDemoContract,
+} from './skill-crew/demo-theater-control'
 import {
   executeRealSkillMomentCritiquePlans,
   executeRealSkillMomentPlans,
@@ -763,6 +773,260 @@ function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillM
   ]
 }
 
+type SkillMomentStageDirectorPlan = {
+  schemaVersion: 1
+  roomId: string
+  sceneType: SkillMomentStageControl['sceneType']
+  controlLevel: SkillMomentStageControl['controlLevel']
+  conflict?: {
+    left: string
+    right: string
+  }
+  goal?: string
+  constraints: string[]
+  mediaInstruction?: string
+  location?: string
+  reveal?: string
+  inferredActorSlugs: string[]
+  schedulerNotes: string[]
+}
+
+type SkillMomentWorldGraphNodeKind =
+  | 'run'
+  | 'room'
+  | 'stage'
+  | 'actor'
+  | 'moment'
+  | 'critique'
+  | 'source'
+  | 'media'
+
+type SkillMomentWorldGraphNode = {
+  id: string
+  kind: SkillMomentWorldGraphNodeKind
+  label: string
+  attrs?: Record<string, unknown>
+}
+
+type SkillMomentWorldGraphEdge = {
+  from: string
+  to: string
+  kind: string
+  weight?: number
+  attrs?: Record<string, unknown>
+}
+
+type SkillMomentWorldGraphSnapshot = {
+  schemaVersion: 1
+  runId: string
+  workspaceId: string
+  roomId: string
+  createdAt: string
+  humanGate?: SkillMomentStageControl['humanGate']
+  acceptedMemoryApplied?: boolean
+  stagePlan?: SkillMomentStageDirectorPlan
+  nodes: SkillMomentWorldGraphNode[]
+  edges: SkillMomentWorldGraphEdge[]
+}
+
+type SkillMomentDramaSchedule = {
+  schemaVersion: 1
+  prioritizedActorSlugs: string[]
+  recommendedMaxMoments?: number
+  recommendedMaxCriticsPerMoment?: number
+  requiredBeats?: string[]
+  antiRepeatRules?: string[]
+  feedbackInfluence?: string
+  notes: string[]
+}
+
+type SkillMomentActorSilenceEvent = {
+  actor: SkillMomentSkillInput
+  targetMomentId?: string
+  targetCritiqueId?: string
+  reason?: string
+}
+
+type SkillMomentActorStateDraft = {
+  schemaVersion: 1
+  runId: string
+  workspaceId: string
+  roomId: string
+  planIndex: number
+  target?: SkillActorDecisionTrace['target']
+  skillId: string
+  skillName: string
+  handle: string
+  decision: SkillActorDecisionTrace['decision']
+  reason?: string
+  body?: string
+  mediaPrompt?: string
+  stateUpdates: SkillActorStateUpdate[]
+  createdAt: string
+}
+
+function compactStageLine(label: string, value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? `${label}：${trimmed}` : undefined
+}
+
+function parseDirectorDirectiveValue(command: string, labels: string[]): string | undefined {
+  for (const line of command.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    for (const label of labels) {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const match = trimmed.match(new RegExp(`^(?:${escaped})\\s*[:=：]\\s*(.+)$`, 'i'))
+      if (match?.[1]?.trim()) {
+        return match[1].trim()
+      }
+    }
+  }
+  return undefined
+}
+
+const STAGE_ACTOR_ALIASES: Record<string, string[]> = {
+  homelander: ['祖国人', 'homelander', '@homelander'],
+  butcher: ['屠夫', 'butcher', '@butcher'],
+  ashley: ['碍事丽', '砀事丽', 'ashley', '@ashley'],
+  atrain: ['火车头', 'a-train', 'atrain', '@atrain'],
+  'black-noir': ['玄色', 'black noir', 'black-noir', '@black-noir'],
+  deep: ['深海', 'the deep', 'deep', '@deep'],
+  starlight: ['星光', 'starlight', '@starlight'],
+  gazi: ['嘎子', '嘎子哥', 'gazi', '@gazi'],
+  'dongbei-yujie': ['东北雨姐', '雨姐', 'dongbei-yujie', '@dongbei-yujie'],
+  'liu-haizhu': ['刘海柱', 'liu-haizhu', '@liu-haizhu'],
+  chomsky: ['chomsky', '乔姆斯基', '@chomsky'],
+  hayek: ['hayek', '哈耶克', '@hayek'],
+}
+
+function inferActorSlugsFromText(text: string, skills?: SkillMomentSkillInput[]): string[] {
+  const lower = text.toLocaleLowerCase()
+  const inferred = new Set<string>()
+
+  for (const [slug, aliases] of Object.entries(STAGE_ACTOR_ALIASES)) {
+    if (aliases.some((alias) => lower.includes(alias.toLocaleLowerCase()))) {
+      inferred.add(slug)
+    }
+  }
+
+  for (const skill of skills ?? []) {
+    const slug = normalizeSkillMomentSlug(skill)
+    const name = skill.name.trim().toLocaleLowerCase()
+    const handle = skill.handle.replace(/^@/, '').trim().toLocaleLowerCase()
+    if ((name && lower.includes(name)) || (handle && lower.includes(handle))) {
+      inferred.add(slug)
+    }
+  }
+
+  return Array.from(inferred)
+}
+
+function parseDirectorConflict(command: string): SkillMomentStageDirectorPlan['conflict'] | undefined {
+  const raw = parseDirectorDirectiveValue(command, ['冲突', 'conflict'])
+  if (!raw) return undefined
+
+  const parts = raw
+    .split(/\s*(?:vs\.?|VS\.?|对|和|与|->|=>|—|--)\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (parts.length < 2) return undefined
+
+  return { left: parts[0], right: parts[1] }
+}
+
+function buildStageDirectorPlan(
+  stageControl: SkillMomentStageControl,
+  roomId: string,
+  skills?: SkillMomentSkillInput[],
+): SkillMomentStageDirectorPlan {
+  const command = stageControl.directorCommand
+  const conflict = parseDirectorConflict(command)
+  const constraints = [
+    parseDirectorDirectiveValue(command, ['限制', 'constraints', 'constraint']),
+    parseDirectorDirectiveValue(command, ['节奏', 'tempo']),
+  ].filter((value): value is string => Boolean(value))
+  const inferredActorSlugs = Array.from(new Set([
+    ...(stageControl.activeCast ?? []),
+    ...(stageControl.speakerOrder ?? []),
+    ...inferActorSlugsFromText(command, skills),
+    ...(conflict ? inferActorSlugsFromText(`${conflict.left}\n${conflict.right}`, skills) : []),
+    ...(stageControl.conflictTarget ? inferActorSlugsFromText(stageControl.conflictTarget, skills) : []),
+  ].map((slug) => slug.trim()).filter(Boolean)))
+
+  const mediaInstruction = parseDirectorDirectiveValue(command, ['媒体', '配图', 'media'])
+  const goal = parseDirectorDirectiveValue(command, ['目标', 'goal'])
+  const reveal = parseDirectorDirectiveValue(command, ['爆料', '秘密', 'reveal'])
+  const location = parseDirectorDirectiveValue(command, ['地点', 'location'])
+
+  const schedulerNotes = [
+    conflict ? `优先让冲突双方出场：${conflict.left} vs ${conflict.right}` : undefined,
+    goal ? `本轮目标：${goal}` : undefined,
+    mediaInstruction ? `媒体动作：${mediaInstruction}` : undefined,
+    constraints.length > 0 ? `限制：${constraints.join('；')}` : undefined,
+    inferredActorSlugs.length > 0 ? `推断演员：${inferredActorSlugs.join(', ')}` : undefined,
+  ].filter((note): note is string => Boolean(note))
+
+  return {
+    schemaVersion: 1,
+    roomId,
+    sceneType: stageControl.sceneType,
+    controlLevel: stageControl.controlLevel,
+    conflict,
+    goal,
+    constraints,
+    mediaInstruction,
+    location,
+    reveal,
+    inferredActorSlugs,
+    schedulerNotes,
+  }
+}
+
+function applyStageDirectorPlan(
+  stageControl: SkillMomentStageControl,
+  plan: SkillMomentStageDirectorPlan,
+): SkillMomentStageControl {
+  if (stageControl.speakerOrder?.length || plan.inferredActorSlugs.length === 0) {
+    return stageControl
+  }
+
+  return {
+    ...stageControl,
+    speakerOrder: plan.inferredActorSlugs,
+  }
+}
+
+function stageControlSourceDigest(
+  runId: string,
+  capturedAt: string,
+  stageControl: SkillMomentStageControl,
+  directorPlan?: SkillMomentStageDirectorPlan,
+): SkillMomentSourceDigest {
+  return {
+    id: `${runId}-stage-control`,
+    source: 'manual',
+    title: `Director control: ${stageControl.sceneType ?? 'friend_circle'}`,
+    url: `agentos://skill-moments/stage/${encodeURIComponent(stageControl.stageId ?? runId)}`,
+    summary: [
+      `导演指令：${stageControl.directorCommand}`,
+      stageControl.controlLevel ? `控场模式：${stageControl.controlLevel}` : undefined,
+      stageControl.conflictTarget ? `冲突对象：${stageControl.conflictTarget}` : undefined,
+      stageControl.activeCast?.length ? `指定演员：${stageControl.activeCast.join(', ')}` : undefined,
+      stageControl.speakerOrder?.length ? `发言顺序：${stageControl.speakerOrder.join(' -> ')}` : undefined,
+      directorPlan?.conflict ? `结构化冲突：${directorPlan.conflict.left} vs ${directorPlan.conflict.right}` : undefined,
+      compactStageLine('结构化目标', directorPlan?.goal),
+      directorPlan?.constraints.length ? `结构化限制：${directorPlan.constraints.join('；')}` : undefined,
+      compactStageLine('媒体要求', directorPlan?.mediaInstruction),
+      compactStageLine('地点', directorPlan?.location),
+      compactStageLine('爆料', directorPlan?.reveal),
+      directorPlan?.schedulerNotes.length ? `调度建议：${directorPlan.schedulerNotes.join(' | ')}` : undefined,
+    ].filter((line): line is string => Boolean(line)).join('\n'),
+    publishedAt: capturedAt,
+    capturedAt,
+    status: 'ready',
+  }
+}
+
 type MockSkillMomentPublication = {
   body: string
   artifacts?: string[]
@@ -799,6 +1063,128 @@ function buildHomelanderFallenGodMomentPublication(
   }
 }
 
+function stageSceneLabel(sceneType: SkillMomentStageControl['sceneType']): string {
+  if (sceneType === 'tavern') return '酒馆'
+  if (sceneType === 'edict_council') return '朝堂'
+  if (sceneType === 'screenplay') return '剧本房'
+  return '朋友圈'
+}
+
+function buildStageControlledMockMomentBody(
+  skill: SkillMomentSkillInput,
+  stageControl: SkillMomentStageControl,
+  index: number,
+): string | undefined {
+  const command = stageControl.directorCommand.trim()
+  if (!command) return undefined
+
+  const skillSlug = normalizeSkillMomentSlug(skill)
+  const scene = stageSceneLabel(stageControl.sceneType)
+  const target = stageControl.conflictTarget?.trim()
+
+  if (skillSlug === 'homelander') {
+    return [
+      `${skill.handle} ${scene}`,
+      command,
+      target ? `${target} 如果还在线，就别躲在评论区，出来把话说清楚。` : '镜头开着，别让任何人替你们解释。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'butcher') {
+    return [
+      `${skill.handle} 仅屠夫小队可见`,
+      `他开始按这套剧本造势了：${command}`,
+      '别急着骂，先把证据、退路、能作证的人排好。等他把话说满，再动手。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'ashley') {
+    return [
+      `${skill.handle} ${scene}`,
+      '所有账号统一口径：先强调安全，再强调透明，最后不要主动提名单来源。',
+      `原话题：${command}`,
+    ].join('\n')
+  }
+
+  if (skillSlug === 'atrain') {
+    return [
+      `${skill.handle} ${scene}`,
+      'Big moment. 镜头很稳，但我建议别把话说死。',
+      target ? `尤其别直接点 ${target}，会被截出来反打。` : '留一点余地，方便下一版剪辑。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'black-noir') {
+    return [
+      `${skill.handle} ${scene}`,
+      '已点赞。',
+      '已截屏。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'gazi') {
+    return [
+      `${skill.handle} ${scene}`,
+      `兄弟们，这波先别急着站队：${command}`,
+      '我就看三样，谁拿证据，谁带节奏，谁最后想卖货。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'dongbei-yujie') {
+    return [
+      `${skill.handle} ${scene}`,
+      `哎呀我天，这场面整挺大：${command}`,
+      '姐说句实在的，热闹归热闹，账本拿出来才算数，别光让老铁们跟着喊。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'liu-haizhu') {
+    return [
+      `${skill.handle} ${scene}`,
+      `我看明白了，今天这事儿是奔着人来的：${command}`,
+      '谁欺负老实人，谁拿老实人挡枪，我刘海柱先记一笔。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'deep') {
+    return [
+      `${skill.handle} ${scene}`,
+      '我先转发。真的，我一直都说大家需要抬头看您。',
+      '如果要我补一版海边角度，我马上补。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'starlight') {
+    return [
+      `${skill.handle} ${scene}`,
+      `我把这条留在这里：${command}`,
+      '点赞不是认同，是留证。镜头外的人也应该有名字。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'chomsky') {
+    return [
+      `${skill.handle} ${scene}`,
+      `这不是单条发言，而是一套可复制的话语装置：${command}`,
+      '先看谁获得扩音器，再看谁被迫沉默。',
+    ].join('\n')
+  }
+
+  if (skillSlug === 'hayek') {
+    return [
+      `${skill.handle} ${scene}`,
+      `我保留制度性疑问：${command}`,
+      '如果每个人只能在一个中心叙事里选择站队，秩序本身就已经被污染。',
+    ].join('\n')
+  }
+
+  return [
+    `${skill.handle} ${scene}`,
+    command,
+    index % 2 === 0 ? '我先回应这一轮，不替别人下结论。' : '先把现场记下来，后面再判断。',
+  ].join('\n')
+}
+
 function buildMockMomentBody(
   skill: SkillMomentSkillInput,
   digest: SkillMomentSourceDigest,
@@ -806,12 +1192,18 @@ function buildMockMomentBody(
   roomId: string,
   artifactKind?: WriterArtifactKind,
   cycleSeed?: string,
+  stageControl?: SkillMomentStageControl,
 ): string {
   if (roomId === WRITER_ROOM_ID && artifactKind) {
     return buildWriterRoomMockMomentBody(skill, artifactKind)
   }
 
   const skillSlug = normalizeSkillMomentSlug(skill)
+  if (stageControl?.directorCommand) {
+    const controlledBody = buildStageControlledMockMomentBody(skill, stageControl, index)
+    if (controlledBody) return controlledBody
+  }
+
   if (skillSlug === 'homelander') {
     return buildHomelanderFallenGodMomentPublication(skill, index, roomId, cycleSeed).body
   }
@@ -918,13 +1310,14 @@ function buildMockMomentPublication(
   roomId: string,
   artifactKind?: WriterArtifactKind,
   cycleSeed?: string,
+  stageControl?: SkillMomentStageControl,
 ): MockSkillMomentPublication {
-  if (roomId !== WRITER_ROOM_ID && normalizeSkillMomentSlug(skill) === 'homelander') {
+  if (!stageControl && roomId !== WRITER_ROOM_ID && normalizeSkillMomentSlug(skill) === 'homelander') {
     return buildHomelanderFallenGodMomentPublication(skill, index, roomId, cycleSeed)
   }
 
   return {
-    body: buildMockMomentBody(skill, digest, index, roomId, artifactKind, cycleSeed),
+    body: buildMockMomentBody(skill, digest, index, roomId, artifactKind, cycleSeed, stageControl),
   }
 }
 
@@ -1162,6 +1555,7 @@ function buildDefaultSkillMomentPlans(
   eligibleSkills: SkillMomentSkillInput[],
   maxMoments: number,
   cycleSeed?: string,
+  prioritizedActorSlugs: string[] = [],
 ): SkillMomentPlan[] {
   if (roomId === WRITER_ROOM_ID) {
     return buildWriterRoomMomentPlans(eligibleSkills, defaultSkillMomentParticipants(), maxMoments)
@@ -1182,6 +1576,16 @@ function buildDefaultSkillMomentPlans(
     }
 
     const homelander = bySlug.get('homelander')
+    if (prioritizedActorSlugs.length > 0) {
+      for (const slug of prioritizedActorSlugs) {
+        addUnique(bySlug.get(slug))
+      }
+      for (const skill of eligibleSkills) {
+        addUnique(skill)
+      }
+      return planned.map((author) => ({ author }))
+    }
+
     addAny(homelander)
     addUnique(bySlug.get('butcher'))
     for (const skill of seededShuffle([
@@ -1520,6 +1924,10 @@ async function maybeGenerateSkillActorRequestedMedia(args: {
       phase: status.phase,
       message: status.message,
       detail: status.detail,
+      workerNarration: status.workerNarration,
+      failureEvidence: status.failureEvidence,
+      domSummary: status.domSummary,
+      debugUrl: status.debugUrl,
       createdAt: new Date().toISOString(),
     }),
   })
@@ -1611,6 +2019,10 @@ async function maybeGenerateHomelanderMomentMedia(args: {
       phase: status.phase,
       message: status.message,
       detail: status.detail,
+      workerNarration: status.workerNarration,
+      failureEvidence: status.failureEvidence,
+      domSummary: status.domSummary,
+      debugUrl: status.debugUrl,
       createdAt: new Date().toISOString(),
     }),
   })
@@ -1759,6 +2171,1101 @@ function skillMomentSilencePolicy(roomId: string): string {
   ].join(' ')
 }
 
+function normalizeStageControl(control: SkillMomentStageControl | undefined): SkillMomentStageControl | undefined {
+  const directorCommand = control?.directorCommand?.trim()
+  if (!control || !directorCommand) return undefined
+
+  return {
+    schemaVersion: 1,
+    ...control,
+    directorCommand,
+    controlLevel: control.controlLevel ?? 'human_locked',
+    sceneType: control.sceneType ?? 'friend_circle',
+    mediaPolicy: control.mediaPolicy ?? 'allow_one_image_if_author_requests',
+    humanGate: control.humanGate ?? 'before_persist',
+    activeCast: control.activeCast?.map((slug) => slug.trim()).filter(Boolean),
+    speakerOrder: control.speakerOrder?.map((slug) => slug.trim()).filter(Boolean),
+  }
+}
+
+function stageControlSlugs(values: string[] | undefined): Set<string> | undefined {
+  const slugs = values
+    ?.map((value) => normalizeSkillMomentSlug({
+      id: value,
+      name: value,
+      handle: value.startsWith('@') ? value : `@${value}`,
+    }))
+    .filter(Boolean)
+  return slugs && slugs.length > 0 ? new Set(slugs) : undefined
+}
+
+function applyStageControlParticipants(
+  skills: SkillMomentSkillInput[],
+  stageControl: SkillMomentStageControl | undefined,
+): SkillMomentSkillInput[] {
+  if (!stageControl) return skills
+
+  const activeCast = stageControlSlugs(stageControl.activeCast)
+  const speakerOrder = stageControlSlugs(stageControl.speakerOrder)
+  const filtered = activeCast
+    ? skills.filter((skill) => activeCast.has(normalizeSkillMomentSlug(skill)))
+    : skills
+
+  if (!speakerOrder) return filtered
+
+  return [...filtered].sort((left, right) => {
+    const leftIndex = stageControl.speakerOrder?.findIndex((slug) => speakerOrder.has(normalizeSkillMomentSlug(left)) && normalizeSkillMomentSlug({
+      id: slug,
+      name: slug,
+      handle: slug.startsWith('@') ? slug : `@${slug}`,
+    }) === normalizeSkillMomentSlug(left)) ?? -1
+    const rightIndex = stageControl.speakerOrder?.findIndex((slug) => speakerOrder.has(normalizeSkillMomentSlug(right)) && normalizeSkillMomentSlug({
+      id: slug,
+      name: slug,
+      handle: slug.startsWith('@') ? slug : `@${slug}`,
+    }) === normalizeSkillMomentSlug(right)) ?? -1
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      if (leftIndex === -1) return 1
+      if (rightIndex === -1) return -1
+      return leftIndex - rightIndex
+    }
+    return 0
+  })
+}
+
+function stageControlArtifacts(stageControl: SkillMomentStageControl | undefined): string[] {
+  if (!stageControl) return []
+  return [
+    'stage_control',
+    `stage_control:${stageControl.controlLevel ?? 'human_locked'}`,
+    stageControl.sceneType ? `stage_scene:${stageControl.sceneType}` : undefined,
+    stageControl.stageId ? `stage:${stageControl.stageId}` : undefined,
+    stageControl.conflictTarget ? `stage_conflict:${stageControl.conflictTarget}` : undefined,
+  ].filter((artifact): artifact is string => Boolean(artifact))
+}
+
+function graphActorNodeId(skill: SkillMomentSkillInput): string {
+  return `actor:${normalizeSkillMomentSlug(skill)}`
+}
+
+function graphActorNodeFromMoment(moment: SkillMoment): SkillMomentWorldGraphNode {
+  return {
+    id: `actor:${normalizeSkillMomentSlug({
+      id: moment.skillId,
+      name: moment.skillName,
+      handle: moment.handle,
+    })}`,
+    kind: 'actor',
+    label: moment.skillName || moment.handle,
+    attrs: {
+      skillId: moment.skillId,
+      handle: moment.handle,
+    },
+  }
+}
+
+function graphActorNodeFromReaction(reaction: SkillMomentReaction): SkillMomentWorldGraphNode {
+  return {
+    id: `actor:${normalizeSkillMomentSlug({
+      id: reaction.skillId,
+      name: reaction.skillName,
+      handle: reaction.handle,
+    })}`,
+    kind: 'actor',
+    label: reaction.skillName || reaction.handle,
+    attrs: {
+      skillId: reaction.skillId,
+      handle: reaction.handle,
+    },
+  }
+}
+
+function graphActorNodeFromCritique(critique: SkillMomentCritique): SkillMomentWorldGraphNode {
+  return {
+    id: `actor:${normalizeSkillMomentSlug({
+      id: critique.criticSkillId,
+      name: critique.criticSkillName,
+      handle: critique.criticHandle,
+    })}`,
+    kind: 'actor',
+    label: critique.criticSkillName || critique.criticHandle,
+    attrs: {
+      skillId: critique.criticSkillId,
+      handle: critique.criticHandle,
+    },
+  }
+}
+
+function compactGraphText(text: string, maxLength = 240): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized
+}
+
+function uniqueWorldGraphNodes(nodes: SkillMomentWorldGraphNode[]): SkillMomentWorldGraphNode[] {
+  return Array.from(new Map(nodes.map((node) => [node.id, node])).values())
+}
+
+function uniqueWorldGraphEdges(edges: SkillMomentWorldGraphEdge[]): SkillMomentWorldGraphEdge[] {
+  return Array.from(new Map(edges.map((edge) => [`${edge.from}->${edge.kind}->${edge.to}`, edge])).values())
+}
+
+function inferConflictActorEdgeIds(
+  stagePlan: SkillMomentStageDirectorPlan | undefined,
+  skills: SkillMomentSkillInput[],
+): [string, string] | undefined {
+  if (!stagePlan?.conflict) return undefined
+
+  const leftSlug = inferActorSlugsFromText(stagePlan.conflict.left, skills)[0] ?? stagePlan.inferredActorSlugs[0]
+  const rightSlug = inferActorSlugsFromText(stagePlan.conflict.right, skills)[0] ?? stagePlan.inferredActorSlugs.find((slug) => slug !== leftSlug)
+  if (!leftSlug || !rightSlug || leftSlug === rightSlug) return undefined
+
+  return [`actor:${leftSlug}`, `actor:${rightSlug}`]
+}
+
+function buildSkillMomentWorldGraphSnapshot(args: {
+  runId: string
+  workspaceId: string
+  roomId: string
+  createdAt: string
+  stageControl?: SkillMomentStageControl
+  stagePlan?: SkillMomentStageDirectorPlan
+  acceptedMemoryApplied: boolean
+  eligibleSkills: SkillMomentSkillInput[]
+  moments: SkillMoment[]
+  sourceDigests: SkillMomentSourceDigest[]
+  actorSilences?: SkillMomentActorSilenceEvent[]
+}): SkillMomentWorldGraphSnapshot {
+  const nodes: SkillMomentWorldGraphNode[] = [
+    {
+      id: `run:${args.runId}`,
+      kind: 'run',
+      label: args.runId,
+      attrs: { workspaceId: args.workspaceId },
+    },
+    {
+      id: `room:${args.roomId}`,
+      kind: 'room',
+      label: args.roomId,
+    },
+  ]
+  const edges: SkillMomentWorldGraphEdge[] = [{
+    from: `run:${args.runId}`,
+    to: `room:${args.roomId}`,
+    kind: 'runs_in',
+  }]
+
+  for (const skill of args.eligibleSkills) {
+    nodes.push({
+      id: graphActorNodeId(skill),
+      kind: 'actor',
+      label: skill.name || skill.handle,
+      attrs: {
+        skillId: skill.id,
+        handle: skill.handle,
+      },
+    })
+    edges.push({
+      from: `run:${args.runId}`,
+      to: graphActorNodeId(skill),
+      kind: 'casts',
+      weight: 0.5,
+    })
+  }
+
+  if (args.stageControl) {
+    const stageId = `stage:${args.stageControl.stageId ?? args.runId}`
+    nodes.push({
+      id: stageId,
+      kind: 'stage',
+      label: args.stageControl.directorCommand,
+      attrs: {
+        controlLevel: args.stageControl.controlLevel,
+        sceneType: args.stageControl.sceneType,
+        conflictTarget: args.stageControl.conflictTarget,
+        humanGate: args.stageControl.humanGate,
+        acceptedMemoryApplied: args.acceptedMemoryApplied,
+        schedulerNotes: args.stagePlan?.schedulerNotes,
+      },
+    })
+    edges.push({
+      from: stageId,
+      to: `run:${args.runId}`,
+      kind: 'directs',
+      weight: 1,
+    })
+
+    const conflictEdge = inferConflictActorEdgeIds(args.stagePlan, args.eligibleSkills)
+    if (conflictEdge) {
+      edges.push({
+        from: conflictEdge[0],
+        to: conflictEdge[1],
+        kind: 'conflicts_with',
+        weight: 1,
+        attrs: {
+          conflict: args.stagePlan?.conflict,
+          goal: args.stagePlan?.goal,
+        },
+      })
+    }
+  }
+
+  for (const digest of args.sourceDigests) {
+    nodes.push({
+      id: `source:${digest.id}`,
+      kind: 'source',
+      label: digest.title,
+      attrs: {
+        source: digest.source,
+        status: digest.status,
+        summary: compactGraphText(digest.summary),
+      },
+    })
+    edges.push({
+      from: `source:${digest.id}`,
+      to: `run:${args.runId}`,
+      kind: 'informs',
+      weight: digest.source === 'manual' ? 1 : 0.4,
+    })
+  }
+
+  for (const moment of args.moments) {
+    const momentNodeId = `moment:${moment.id}`
+    const actorNode = graphActorNodeFromMoment(moment)
+    nodes.push(actorNode, {
+      id: momentNodeId,
+      kind: 'moment',
+      label: `${moment.skillName}: ${compactGraphText(moment.body, 120)}`,
+      attrs: {
+        skillId: moment.skillId,
+        handle: moment.handle,
+        body: compactGraphText(moment.body),
+        artifacts: moment.artifacts,
+        createdAt: moment.createdAt,
+      },
+    })
+    edges.push(
+      {
+        from: actorNode.id,
+        to: momentNodeId,
+        kind: 'publishes',
+        weight: 1,
+      },
+      {
+        from: momentNodeId,
+        to: `run:${args.runId}`,
+        kind: 'part_of_run',
+      },
+    )
+
+    for (const source of moment.sources) {
+      nodes.push({
+        id: `source:${source.id}`,
+        kind: 'source',
+        label: source.title,
+        attrs: {
+          source: source.source,
+          status: source.status,
+          summary: compactGraphText(source.summary),
+        },
+      })
+      edges.push({
+        from: `source:${source.id}`,
+        to: momentNodeId,
+        kind: 'triggers',
+        weight: source.source === 'manual' ? 1 : 0.4,
+      })
+    }
+
+    for (const media of moment.media ?? []) {
+      const mediaNodeId = `media:${media.id}`
+      nodes.push({
+        id: mediaNodeId,
+        kind: 'media',
+        label: media.alt ?? media.id,
+        attrs: {
+          path: media.path,
+          mimeType: media.mimeType,
+          width: media.width,
+          height: media.height,
+        },
+      })
+      edges.push(
+        { from: actorNode.id, to: mediaNodeId, kind: 'requests_media', weight: 0.8 },
+        { from: mediaNodeId, to: momentNodeId, kind: 'attached_to' },
+      )
+    }
+
+    for (const reaction of moment.reactions ?? []) {
+      const reactionActorNode = graphActorNodeFromReaction(reaction)
+      nodes.push(reactionActorNode)
+      edges.push({
+        from: reactionActorNode.id,
+        to: momentNodeId,
+        kind: 'likes',
+        weight: 0.2,
+      })
+    }
+
+    for (const critique of moment.critiques) {
+      const critiqueNodeId = `critique:${critique.id}`
+      const criticActorNode = graphActorNodeFromCritique(critique)
+      nodes.push(criticActorNode, {
+        id: critiqueNodeId,
+        kind: 'critique',
+        label: `${critique.criticSkillName}: ${compactGraphText(critique.body, 120)}`,
+        attrs: {
+          body: compactGraphText(critique.body),
+          artifacts: critique.artifacts,
+          createdAt: critique.createdAt,
+        },
+      })
+      edges.push(
+        {
+          from: criticActorNode.id,
+          to: critiqueNodeId,
+          kind: 'authors',
+          weight: 1,
+        },
+        {
+          from: critiqueNodeId,
+          to: momentNodeId,
+          kind: 'critiques',
+          weight: 0.8,
+        },
+      )
+
+      for (const reaction of critique.reactions ?? []) {
+        const reactionActorNode = graphActorNodeFromReaction(reaction)
+        nodes.push(reactionActorNode)
+        edges.push({
+          from: reactionActorNode.id,
+          to: critiqueNodeId,
+          kind: 'likes',
+          weight: 0.2,
+        })
+      }
+    }
+  }
+
+  for (const silence of args.actorSilences ?? []) {
+    const actorNodeId = graphActorNodeId(silence.actor)
+    const targetNodeId = silence.targetCritiqueId
+      ? `critique:${silence.targetCritiqueId}`
+      : silence.targetMomentId
+        ? `moment:${silence.targetMomentId}`
+        : `run:${args.runId}`
+    nodes.push({
+      id: actorNodeId,
+      kind: 'actor',
+      label: silence.actor.name || silence.actor.handle,
+      attrs: {
+        skillId: silence.actor.id,
+        handle: silence.actor.handle,
+      },
+    })
+    edges.push({
+      from: actorNodeId,
+      to: targetNodeId,
+      kind: 'stayed_silent',
+      weight: 0.4,
+      attrs: {
+        reason: silence.reason,
+      },
+    })
+  }
+
+  return {
+    schemaVersion: 1,
+    runId: args.runId,
+    workspaceId: args.workspaceId,
+    roomId: args.roomId,
+    createdAt: args.createdAt,
+    humanGate: args.stageControl?.humanGate,
+    acceptedMemoryApplied: args.acceptedMemoryApplied,
+    stagePlan: args.stagePlan,
+    nodes: uniqueWorldGraphNodes(nodes),
+    edges: uniqueWorldGraphEdges(edges),
+  }
+}
+
+async function readRecentWorldGraphSnapshots(
+  worldGraphPath: string,
+  roomId: string,
+  limit = 6,
+): Promise<SkillMomentWorldGraphSnapshot[]> {
+  const snapshots = await readJsonlRecords<SkillMomentWorldGraphSnapshot>(worldGraphPath)
+  return snapshots
+    .filter((snapshot) => snapshot.roomId === roomId && Array.isArray(snapshot.nodes) && Array.isArray(snapshot.edges))
+    .filter((snapshot) => snapshot.acceptedMemoryApplied !== false)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, limit)
+}
+
+function worldGraphNodeMap(snapshot: SkillMomentWorldGraphSnapshot): Map<string, SkillMomentWorldGraphNode> {
+  return new Map(snapshot.nodes.map((node) => [node.id, node]))
+}
+
+function actorSlugFromGraphNodeId(id: string): string | undefined {
+  return id.startsWith('actor:') ? id.slice('actor:'.length) : undefined
+}
+
+function actorSlugForGraphContentNode(
+  snapshot: SkillMomentWorldGraphSnapshot,
+  nodeId: string,
+): string | undefined {
+  const directActorSlug = actorSlugFromGraphNodeId(nodeId)
+  if (directActorSlug) return directActorSlug
+
+  const authorEdge = snapshot.edges.find((edge) => (
+    (edge.kind === 'authors' || edge.kind === 'publishes') && edge.to === nodeId
+  ))
+  return authorEdge ? actorSlugFromGraphNodeId(authorEdge.from) : undefined
+}
+
+function graphActorLabelForNode(
+  snapshot: SkillMomentWorldGraphSnapshot,
+  nodes: Map<string, SkillMomentWorldGraphNode>,
+  nodeId: string,
+): string | undefined {
+  const actorSlug = actorSlugForGraphContentNode(snapshot, nodeId)
+  if (!actorSlug) return undefined
+  return nodes.get(`actor:${actorSlug}`)?.label ?? actorSlug
+}
+
+function graphContentKindLabel(kind: SkillMomentWorldGraphNodeKind | undefined): string {
+  if (kind === 'moment') return '主贴'
+  if (kind === 'critique') return '评论'
+  if (kind === 'media') return '配图'
+  if (kind === 'run') return '本轮'
+  return '内容'
+}
+
+function graphRelationLine(args: {
+  prefix: string
+  fromLabel: string
+  action: string
+  toActorLabel?: string
+  targetKind?: SkillMomentWorldGraphNodeKind
+  targetLabel?: string
+  reason?: string
+}): string {
+  const targetKind = graphContentKindLabel(args.targetKind)
+  const target = args.toActorLabel
+    ? `${args.toActorLabel} 的${targetKind}`
+    : targetKind
+  const quote = args.targetLabel ? `：「${compactGraphText(args.targetLabel, 120)}」` : ''
+  const reason = args.reason ? `，原因=${compactGraphText(args.reason, 80)}` : ''
+  return `${args.prefix}：${args.fromLabel} ${args.action} ${target}${quote}${reason}`
+}
+
+function buildWorldGraphMemoryDigest(
+  runId: string,
+  capturedAt: string,
+  roomId: string,
+  snapshots: SkillMomentWorldGraphSnapshot[],
+): SkillMomentSourceDigest | undefined {
+  if (snapshots.length === 0) return undefined
+
+  const lines: string[] = []
+  for (const snapshot of snapshots.slice(0, 3)) {
+    const nodes = worldGraphNodeMap(snapshot)
+    const conflictEdges = snapshot.edges.filter((edge) => edge.kind === 'conflicts_with').slice(0, 3)
+    for (const edge of conflictEdges) {
+      const from = nodes.get(edge.from)?.label ?? edge.from
+      const to = nodes.get(edge.to)?.label ?? edge.to
+      lines.push(`上一轮冲突：${from} -> ${to}${edge.attrs?.goal ? `，目标=${String(edge.attrs.goal)}` : ''}`)
+    }
+
+    const critiqueEdges = snapshot.edges.filter((edge) => edge.kind === 'critiques').slice(0, 5)
+    for (const edge of critiqueEdges) {
+      const critique = nodes.get(edge.from)
+      const moment = nodes.get(edge.to)
+      if (critique && moment) {
+        lines.push(graphRelationLine({
+          prefix: '上一轮回应',
+          fromLabel: graphActorLabelForNode(snapshot, nodes, edge.from) ?? critique.label,
+          action: '回应了',
+          toActorLabel: graphActorLabelForNode(snapshot, nodes, edge.to),
+          targetKind: moment.kind,
+          targetLabel: critique.attrs?.body ? String(critique.attrs.body) : critique.label,
+        }))
+      }
+    }
+
+    const likeEdges = snapshot.edges.filter((edge) => edge.kind === 'likes').slice(0, 5)
+    for (const edge of likeEdges) {
+      const from = nodes.get(edge.from)?.label ?? edge.from
+      const target = nodes.get(edge.to)
+      lines.push(graphRelationLine({
+        prefix: '上一轮点赞',
+        fromLabel: from,
+        action: '点赞了',
+        toActorLabel: graphActorLabelForNode(snapshot, nodes, edge.to),
+        targetKind: target?.kind,
+        targetLabel: target?.label ?? edge.to,
+      }))
+    }
+
+    const silenceEdges = snapshot.edges.filter((edge) => edge.kind === 'stayed_silent').slice(0, 5)
+    for (const edge of silenceEdges) {
+      const from = nodes.get(edge.from)?.label ?? edge.from
+      const target = nodes.get(edge.to)
+      lines.push(graphRelationLine({
+        prefix: '上一轮沉默',
+        fromLabel: from,
+        action: '沉默于',
+        toActorLabel: graphActorLabelForNode(snapshot, nodes, edge.to),
+        targetKind: target?.kind,
+        targetLabel: target?.label,
+        reason: typeof edge.attrs?.reason === 'string' ? edge.attrs.reason : undefined,
+      }))
+    }
+  }
+
+  const summary = compactUniqueArtifacts(lines).slice(0, 14).join('\n')
+  if (!summary) return undefined
+
+  return {
+    id: `${runId}-world-graph-memory`,
+    source: 'manual',
+    title: `World graph memory: ${roomId}`,
+    url: `agentos://skill-moments/world-graph/${encodeURIComponent(roomId)}`,
+    summary,
+    publishedAt: capturedAt,
+    capturedAt,
+    status: 'ready',
+  }
+}
+
+function buildWorldGraphActorMemoryRecords(args: {
+  snapshots: SkillMomentWorldGraphSnapshot[]
+  workspaceId: string
+  roomId: string
+  runId: string
+  createdAt: string
+  skills: SkillMomentSkillInput[]
+}): SkillActorMemoryRecord[] {
+  const records: SkillActorMemoryRecord[] = []
+  const skillBySlug = new Map(args.skills.map((skill) => [normalizeSkillMomentSlug(skill), skill]))
+
+  for (const snapshot of args.snapshots.slice(0, 6)) {
+    const nodes = worldGraphNodeMap(snapshot)
+
+    for (const edge of snapshot.edges) {
+      const actorSlug = actorSlugFromGraphNodeId(edge.from)
+      if (!actorSlug) continue
+
+      const skill = skillBySlug.get(actorSlug)
+      if (!skill) continue
+
+      const target = nodes.get(edge.to)
+      const source = nodes.get(edge.from)
+      if (!target || !source) continue
+
+      let field = ''
+      let value = ''
+      if (edge.kind === 'publishes') {
+        field = 'world_graph.recent_post'
+        value = `${source.label} 发布了主贴：${target.attrs?.body ? String(target.attrs.body) : target.label}`
+      } else if (edge.kind === 'likes') {
+        field = 'world_graph.recent_like'
+        value = graphRelationLine({
+          prefix: '关系记忆',
+          fromLabel: source.label,
+          action: '点赞了',
+          toActorLabel: graphActorLabelForNode(snapshot, nodes, edge.to),
+          targetKind: target.kind,
+          targetLabel: target.label,
+        })
+      } else if (edge.kind === 'conflicts_with') {
+        field = `relationship.${target.id.replace(/^actor:/, '')}`
+        value = `${source.label} 与 ${target.label} 有历史冲突${edge.attrs?.goal ? `；目标=${String(edge.attrs.goal)}` : ''}`
+      } else if (edge.kind === 'requests_media') {
+        field = 'world_graph.media_intent'
+        value = `${source.label} 曾要求配图：${target.label}`
+      } else if (edge.kind === 'stayed_silent') {
+        field = 'world_graph.recent_silence'
+        value = graphRelationLine({
+          prefix: '关系记忆',
+          fromLabel: source.label,
+          action: '沉默于',
+          toActorLabel: graphActorLabelForNode(snapshot, nodes, edge.to),
+          targetKind: target.kind,
+          targetLabel: target.label,
+          reason: typeof edge.attrs?.reason === 'string' ? edge.attrs.reason : undefined,
+        })
+      }
+
+      if (field && value) {
+        records.push({
+          schemaVersion: 1,
+          workspaceId: args.workspaceId,
+          roomId: args.roomId,
+          runId: args.runId,
+          planIndex: -1,
+          skillId: skill.id,
+          skillName: skill.name,
+          handle: skill.handle,
+          field,
+          value: compactGraphText(value),
+          sourceDecision: 'reject',
+          sourceReason: `retrieved from world graph run ${snapshot.runId}`,
+          createdAt: snapshot.createdAt || args.createdAt,
+        })
+      }
+    }
+
+    const critiqueToMoment = new Map(snapshot.edges
+      .filter((edge) => edge.kind === 'critiques')
+      .map((edge) => [edge.from, edge.to]))
+    for (const edge of snapshot.edges.filter((item) => item.kind === 'authors')) {
+      const actorSlug = actorSlugFromGraphNodeId(edge.from)
+      if (!actorSlug) continue
+      const skill = skillBySlug.get(actorSlug)
+      const critique = nodes.get(edge.to)
+      const parentMomentId = critiqueToMoment.get(edge.to)
+      const parentMoment = parentMomentId ? nodes.get(parentMomentId) : undefined
+      if (!skill || !critique) continue
+
+      records.push({
+        schemaVersion: 1,
+        workspaceId: args.workspaceId,
+        roomId: args.roomId,
+        runId: args.runId,
+        planIndex: -1,
+        skillId: skill.id,
+        skillName: skill.name,
+        handle: skill.handle,
+        field: 'world_graph.recent_comment',
+        value: compactGraphText(graphRelationLine({
+          prefix: '关系记忆',
+          fromLabel: nodes.get(edge.from)?.label ?? skill.name,
+          action: '回应了',
+          toActorLabel: parentMoment ? graphActorLabelForNode(snapshot, nodes, parentMoment.id) : undefined,
+          targetKind: parentMoment?.kind,
+          targetLabel: critique.attrs?.body ? String(critique.attrs.body) : critique.label,
+        })),
+        sourceDecision: 'reject',
+        sourceReason: `retrieved from world graph run ${snapshot.runId}`,
+        createdAt: snapshot.createdAt || args.createdAt,
+      })
+    }
+  }
+
+  return records.slice(0, 80)
+}
+
+function buildDramaSchedule(args: {
+  runId: string
+  roomId: string
+  stageControl?: SkillMomentStageControl
+  stagePlan?: SkillMomentStageDirectorPlan
+  worldGraphSnapshots: SkillMomentWorldGraphSnapshot[]
+  eligibleSkills: SkillMomentSkillInput[]
+  fallbackMaxMoments: number
+  fallbackMaxCriticsPerMoment: number
+  feedbackCalibration?: SkillMomentShowFeedbackCalibration
+}): SkillMomentDramaSchedule {
+  const prioritized = new Set<string>()
+  for (const slug of args.stagePlan?.inferredActorSlugs ?? []) {
+    prioritized.add(slug)
+  }
+
+  for (const snapshot of args.worldGraphSnapshots.slice(0, 3)) {
+    for (const edge of snapshot.edges) {
+      if (edge.kind !== 'conflicts_with' && edge.kind !== 'critiques') continue
+      const fromSlug = actorSlugForGraphContentNode(snapshot, edge.from)
+      const toSlug = actorSlugForGraphContentNode(snapshot, edge.to)
+      if (fromSlug) prioritized.add(fromSlug)
+      if (toSlug) prioritized.add(toSlug)
+    }
+  }
+
+  const availableSlugs = new Set(args.eligibleSkills.map((skill) => normalizeSkillMomentSlug(skill)))
+  const prioritizedActorSlugs = Array.from(prioritized).filter((slug) => availableSlugs.has(slug))
+  const historicalConflictSlugs = new Set<string>()
+  const historicalCommentSlugs = new Set<string>()
+  const historicalLikeSlugs = new Set<string>()
+  for (const snapshot of args.worldGraphSnapshots.slice(0, 3)) {
+    for (const edge of snapshot.edges) {
+      const fromSlug = actorSlugForGraphContentNode(snapshot, edge.from)
+      const toSlug = actorSlugForGraphContentNode(snapshot, edge.to)
+      if (edge.kind === 'conflicts_with') {
+        if (fromSlug) historicalConflictSlugs.add(fromSlug)
+        if (toSlug) historicalConflictSlugs.add(toSlug)
+      } else if (edge.kind === 'critiques') {
+        if (fromSlug) historicalCommentSlugs.add(fromSlug)
+        if (toSlug) historicalCommentSlugs.add(toSlug)
+      } else if (edge.kind === 'likes') {
+        if (fromSlug) historicalLikeSlugs.add(fromSlug)
+        if (toSlug) historicalLikeSlugs.add(toSlug)
+      }
+    }
+  }
+  const historicalConflictActors = Array.from(historicalConflictSlugs).filter((slug) => availableSlugs.has(slug)).slice(0, 6)
+  const historicalCommentActors = Array.from(historicalCommentSlugs).filter((slug) => availableSlugs.has(slug)).slice(0, 6)
+  const historicalLikeActors = Array.from(historicalLikeSlugs).filter((slug) => availableSlugs.has(slug)).slice(0, 6)
+
+  const hasReveal = Boolean(args.stagePlan?.reveal)
+  const hasMediaAsk = Boolean(args.stagePlan?.mediaInstruction) || args.stageControl?.mediaPolicy === 'allow_actor_requested_images' || args.stageControl?.mediaPolicy === 'allow_one_image_if_author_requests'
+  const shortConstraint = args.stagePlan?.constraints.some((constraint) => /短评|少说|brief|short/i.test(constraint)) ?? false
+  const feedbackAdjustment = args.feedbackCalibration?.adjustment ?? 0
+  const hasFeedbackRegression = feedbackAdjustment < -0.01
+  const hasFeedbackEvolution = feedbackAdjustment > 0.01
+  const recommendedMaxMoments = Math.min(
+    Math.max(args.fallbackMaxMoments, prioritizedActorSlugs.length > 0 ? Math.min(prioritizedActorSlugs.length + 1, 6) : args.fallbackMaxMoments),
+    6,
+  )
+  const recommendedMaxCriticsPerMoment = hasFeedbackRegression
+    ? Math.min(Math.max(args.fallbackMaxCriticsPerMoment, 4), 5)
+    : shortConstraint
+    ? Math.min(args.fallbackMaxCriticsPerMoment, 3)
+    : Math.min(Math.max(args.fallbackMaxCriticsPerMoment, hasReveal ? 5 : 4), 5)
+  const requiredBeats = [
+    '公开挑衅或抛出要求',
+    '死敌反击、埋雷或转入仅可见行动',
+    '盟友控评或站队',
+    '旁观者质疑、拱火或给出证据线索',
+    hasReveal ? '爆料必须改变下一轮目标' : undefined,
+    hasMediaAsk ? '准备一条有画面感的图片动作' : undefined,
+  ].filter((beat): beat is string => Boolean(beat))
+  const antiRepeatRules = [
+    '禁止重复“我回来了/我复活了”式宣言',
+    '禁止只有“已点赞/欢迎回来/Big moment”的低价值评论',
+    '每条主贴或评论必须带来新动作、新证据、新站队或新画面',
+  ]
+  const feedbackInfluence = hasFeedbackRegression
+    ? '观众反馈偏退化：本轮提高冲突密度，减少套话，优先安排反击、爆料、短评论。'
+    : hasFeedbackEvolution
+      ? '观众反馈偏进化：本轮延续被认可的冲突、画面和站队模式。'
+      : args.feedbackCalibration && args.feedbackCalibration.counts.total > 0
+        ? '观众反馈分歧不大：维持节奏，但每条内容仍必须推进局势。'
+        : undefined
+
+  const notes = [
+    args.stageControl?.directorCommand ? `导演指令：${compactGraphText(args.stageControl.directorCommand, 160)}` : undefined,
+    prioritizedActorSlugs.length > 0 ? `优先演员：${prioritizedActorSlugs.join(', ')}` : undefined,
+    args.stagePlan?.inferredActorSlugs.length ? `导演/文本点名：${args.stagePlan.inferredActorSlugs.join(', ')}` : undefined,
+    historicalConflictActors.length > 0 ? `历史冲突牵引：${historicalConflictActors.join(', ')}` : undefined,
+    historicalCommentActors.length > 0 ? `历史评论牵引：${historicalCommentActors.join(', ')}` : undefined,
+    historicalLikeActors.length > 0 ? `历史点赞牵引：${historicalLikeActors.join(', ')}` : undefined,
+    hasReveal ? `爆料驱动：${args.stagePlan?.reveal}` : undefined,
+    hasMediaAsk ? `媒体驱动：${args.stagePlan?.mediaInstruction ?? args.stageControl?.mediaPolicy}` : undefined,
+    shortConstraint ? '短评限制：降低每条主贴评论数量' : undefined,
+    feedbackInfluence,
+    `硬规则：${requiredBeats.join(' / ')}`,
+    args.worldGraphSnapshots.length > 0 ? `读取 ${args.worldGraphSnapshots.length} 条 world graph 历史` : undefined,
+  ].filter((note): note is string => Boolean(note))
+
+  return {
+    schemaVersion: 1,
+    prioritizedActorSlugs,
+    recommendedMaxMoments,
+    recommendedMaxCriticsPerMoment,
+    requiredBeats,
+    antiRepeatRules,
+    feedbackInfluence,
+    notes,
+  }
+}
+
+function applyDramaScheduleParticipants(
+  skills: SkillMomentSkillInput[],
+  schedule: SkillMomentDramaSchedule,
+): SkillMomentSkillInput[] {
+  if (schedule.prioritizedActorSlugs.length === 0) return skills
+  const priority = new Map(schedule.prioritizedActorSlugs.map((slug, index) => [slug, index]))
+  return [...skills].sort((left, right) => {
+    const leftPriority = priority.get(normalizeSkillMomentSlug(left)) ?? Number.MAX_SAFE_INTEGER
+    const rightPriority = priority.get(normalizeSkillMomentSlug(right)) ?? Number.MAX_SAFE_INTEGER
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority
+    return 0
+  })
+}
+
+function clampScore(value: number): number {
+  return Math.round(Math.max(0, Math.min(1, value)) * 100) / 100
+}
+
+function showMetric(score: number, summary: string, evidence: string[]): SkillMomentShowEvaluationMetric {
+  return {
+    score: clampScore(score),
+    summary,
+    evidence: compactUniqueArtifacts(evidence.filter(Boolean)).slice(0, 8),
+  }
+}
+
+function repetitionKey(text: string): string {
+  const normalized = text
+    .toLocaleLowerCase()
+    .replace(/@\S+/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .trim()
+  return Array.from(normalized).slice(0, 56).join('')
+}
+
+function actorSlugFromMoment(moment: SkillMoment): string {
+  return normalizeSkillMomentSlug({
+    id: moment.skillId,
+    name: moment.skillName,
+    handle: moment.handle,
+  })
+}
+
+function actorSlugFromCritique(critique: SkillMomentCritique): string {
+  return normalizeSkillMomentSlug({
+    id: critique.criticSkillId,
+    name: critique.criticSkillName,
+    handle: critique.criticHandle,
+  })
+}
+
+function buildSkillMomentShowEvaluation(args: {
+  moments: SkillMoment[]
+  eligibleSkills: SkillMomentSkillInput[]
+  stageControl?: SkillMomentStageControl
+  stagePlan?: SkillMomentStageDirectorPlan
+  dramaSchedule: SkillMomentDramaSchedule
+  mediaErrors: string[]
+  browserUse: { enabled: boolean; reason?: string }
+  actorSilences: SkillMomentActorSilenceEvent[]
+}): SkillMomentShowEvaluation {
+  const allTexts = args.moments.flatMap((moment) => [
+    moment.body,
+    ...moment.critiques.map((critique) => critique.body),
+  ])
+  const bodyKeyCounts = new Map<string, number>()
+  for (const text of allTexts) {
+    const key = repetitionKey(text)
+    if (key) bodyKeyCounts.set(key, (bodyKeyCounts.get(key) ?? 0) + 1)
+  }
+  const duplicateBodyCount = Array.from(bodyKeyCounts.values()).reduce((count, value) => count + Math.max(0, value - 1), 0)
+  const postAuthors = args.moments.map(actorSlugFromMoment)
+  const repeatedPostAuthors = Math.max(0, postAuthors.length - new Set(postAuthors).size)
+  const repetition = showMetric(
+    (duplicateBodyCount + repeatedPostAuthors * 0.5) / Math.max(1, allTexts.length),
+    duplicateBodyCount > 0 || repeatedPostAuthors > 0
+      ? '存在重复正文或同演员连续占比偏高'
+      : '未发现明显重复正文',
+    [
+      duplicateBodyCount > 0 ? `重复文本片段：${duplicateBodyCount}` : '',
+      repeatedPostAuthors > 0 ? `重复主贴演员次数：${repeatedPostAuthors}` : '',
+    ],
+  )
+
+  const critiqueCount = args.moments.reduce((count, moment) => count + moment.critiques.length, 0)
+  const conflictPairs = new Set<string>()
+  const conflictEvidence: string[] = []
+  if (args.stagePlan?.conflict) {
+    conflictEvidence.push(`导演冲突：${args.stagePlan.conflict.left} vs ${args.stagePlan.conflict.right}`)
+  }
+  for (const moment of args.moments) {
+    const authorSlug = actorSlugFromMoment(moment)
+    for (const critique of moment.critiques) {
+      const criticSlug = actorSlugFromCritique(critique)
+      conflictPairs.add(`${criticSlug}->${authorSlug}`)
+      conflictEvidence.push(`${critique.criticSkillName || critique.criticHandle} 回应 ${moment.skillName || moment.handle}`)
+    }
+  }
+  const conflictStrength = showMetric(
+    (critiqueCount + conflictPairs.size * 0.35 + (args.stagePlan?.conflict ? 2 : 0)) / Math.max(3, args.moments.length * 2),
+    critiqueCount > 0
+      ? `形成 ${conflictPairs.size} 组回应关系`
+      : '没有形成评论冲突',
+    conflictEvidence,
+  )
+
+  const visualPattern = /镜头|画面|现场|大屏|截屏|配图|城市|夜|广场|海边|灯|camera|image|screen|rooftop|skyline/i
+  const visualTextCount = allTexts.filter((text) => visualPattern.test(text)).length
+  const mediaCount = args.moments.reduce((count, moment) => count + (moment.media?.length ?? 0), 0)
+  const mediaRequestCount = args.moments.filter((moment) => moment.artifacts?.includes('actor_media_request')).length
+  const visuality = showMetric(
+    (mediaCount * 0.45 + visualTextCount * 0.12 + mediaRequestCount * 0.2) / Math.max(1, args.moments.length),
+    mediaCount > 0
+      ? `已有 ${mediaCount} 个媒体附件`
+      : visualTextCount > 0
+        ? '正文里有画面线索但缺少实际媒体'
+        : '画面线索偏弱',
+    [
+      mediaCount > 0 ? `媒体附件：${mediaCount}` : '',
+      mediaRequestCount > 0 ? `演员配图请求：${mediaRequestCount}` : '',
+      visualTextCount > 0 ? `画面词命中：${visualTextCount}` : '',
+    ],
+  )
+
+  const activeActors = new Set<string>()
+  for (const moment of args.moments) {
+    activeActors.add(actorSlugFromMoment(moment))
+    for (const critique of moment.critiques) activeActors.add(actorSlugFromCritique(critique))
+    for (const reaction of moment.reactions ?? []) {
+      activeActors.add(normalizeSkillMomentSlug({
+        id: reaction.skillId,
+        name: reaction.skillName,
+        handle: reaction.handle,
+      }))
+    }
+    for (const critique of moment.critiques) {
+      for (const reaction of critique.reactions ?? []) {
+        activeActors.add(normalizeSkillMomentSlug({
+          id: reaction.skillId,
+          name: reaction.skillName,
+          handle: reaction.handle,
+        }))
+      }
+    }
+  }
+  for (const silence of args.actorSilences) {
+    activeActors.add(normalizeSkillMomentSlug(silence.actor))
+  }
+  const availableActorCount = Math.max(1, args.eligibleSkills.length)
+  const actorParticipation = showMetric(
+    activeActors.size / availableActorCount,
+    `${activeActors.size}/${availableActorCount} 个可用演员有发言、回应、点赞或沉默记录`,
+    [
+      `参与演员：${Array.from(activeActors).slice(0, 10).join(', ')}`,
+      args.actorSilences.length > 0 ? `沉默记录：${args.actorSilences.length}` : '',
+    ],
+  )
+
+  const mediaRequested = Boolean(args.stagePlan?.mediaInstruction)
+    || args.stageControl?.mediaPolicy === 'allow_actor_requested_images'
+    || mediaRequestCount > 0
+  const mediaMissingRisk = showMetric(
+    !mediaRequested
+      ? (args.mediaErrors.length > 0 ? 0.2 : 0)
+      : (mediaCount === 0 ? 0.65 : 0.15)
+        + (args.mediaErrors.length * 0.2)
+        + (!args.browserUse.enabled ? 0.2 : 0),
+    mediaRequested
+      ? mediaCount > 0
+        ? '媒体有请求且已有附件，风险较低'
+        : '媒体被要求但没有落地附件'
+      : '本轮没有强媒体要求',
+    [
+      args.stagePlan?.mediaInstruction ? `导演媒体要求：${args.stagePlan.mediaInstruction}` : '',
+      args.stageControl?.mediaPolicy ? `媒体策略：${args.stageControl.mediaPolicy}` : '',
+      args.mediaErrors.length > 0 ? `媒体错误：${args.mediaErrors.slice(0, 3).join(' | ')}` : '',
+      !args.browserUse.enabled && mediaRequested ? `Browser Use 不可用：${args.browserUse.reason ?? 'unknown'}` : '',
+    ],
+  )
+
+  const overallScore = clampScore(
+    (1 - repetition.score) * 0.2
+    + conflictStrength.score * 0.25
+    + visuality.score * 0.2
+    + actorParticipation.score * 0.25
+    + (1 - mediaMissingRisk.score) * 0.1,
+  )
+
+  return {
+    schemaVersion: 1,
+    overallScore,
+    repetition,
+    conflictStrength,
+    visuality,
+    actorParticipation,
+    mediaMissingRisk,
+    notes: [
+      'scores are 0..1; higher is better except repetition and mediaMissingRisk',
+      args.dramaSchedule.notes.length > 0 ? `scheduler: ${args.dramaSchedule.notes.join(' | ')}` : '',
+    ].filter(Boolean),
+  }
+}
+
+function buildSkillMomentActorStateDraft(args: {
+  decision: SkillActorDecisionTrace
+  workspaceId: string
+  roomId: string
+  runId: string
+  createdAt: string
+}): SkillMomentActorStateDraft {
+  return {
+    schemaVersion: 1,
+    runId: args.runId,
+    workspaceId: args.workspaceId,
+    roomId: args.roomId,
+    planIndex: args.decision.planIndex,
+    target: args.decision.target,
+    skillId: args.decision.author.id,
+    skillName: args.decision.author.name,
+    handle: args.decision.author.handle,
+    decision: args.decision.decision,
+    reason: args.decision.reason,
+    body: args.decision.body,
+    mediaPrompt: args.decision.mediaPrompt,
+    stateUpdates: args.decision.stateUpdates ?? [],
+    createdAt: args.createdAt,
+  }
+}
+
+async function persistOrDraftSkillActorDecision(args: {
+  decision: SkillActorDecisionTrace
+  workspaceId: string
+  roomId: string
+  runId: string
+  createdAt: string
+  shouldApplyActorMemory: boolean
+  actorStatesPath: string
+  actorMemoryPath: string
+  actorMemoryRecords: SkillActorMemoryRecord[]
+  draftActorStates: SkillMomentActorStateDraft[]
+  draftActorMemory: SkillActorMemoryRecord[]
+}): Promise<number> {
+  const stateRecord = buildSkillMomentActorStateDraft({
+    decision: args.decision,
+    workspaceId: args.workspaceId,
+    roomId: args.roomId,
+    runId: args.runId,
+    createdAt: args.createdAt,
+  })
+  const memoryRecords = buildSkillActorMemoryRecords({
+    decision: args.decision,
+    workspaceId: args.workspaceId,
+    roomId: args.roomId,
+    runId: args.runId,
+    createdAt: args.createdAt,
+  })
+
+  if (!args.shouldApplyActorMemory) {
+    args.draftActorStates.push(stateRecord)
+    args.draftActorMemory.push(...memoryRecords)
+    return 0
+  }
+
+  await appendJsonlRecord(args.actorStatesPath, stateRecord)
+  for (const memoryRecord of memoryRecords) {
+    await appendJsonlRecord(args.actorMemoryPath, memoryRecord)
+    args.actorMemoryRecords.push(memoryRecord)
+  }
+  return memoryRecords.length
+}
+
+function appendMockActorSilences(args: {
+  eligibleSkills: SkillMomentSkillInput[]
+  moments: SkillMoment[]
+  actorSilences: SkillMomentActorSilenceEvent[]
+}): void {
+  const activeActorSlugs = new Set<string>()
+  for (const moment of args.moments) {
+    activeActorSlugs.add(actorSlugFromMoment(moment))
+    for (const critique of moment.critiques) {
+      activeActorSlugs.add(actorSlugFromCritique(critique))
+    }
+  }
+
+  const existingSilenceSlugs = new Set(args.actorSilences.map((silence) => normalizeSkillMomentSlug(silence.actor)))
+  for (const skill of args.eligibleSkills) {
+    const slug = normalizeSkillMomentSlug(skill)
+    if (!activeActorSlugs.has(slug) && !existingSilenceSlugs.has(slug)) {
+      args.actorSilences.push({
+        actor: skill,
+        reason: 'mock_no_post_or_comment',
+      })
+      existingSilenceSlugs.add(slug)
+    }
+  }
+}
+
 function shouldUseRealSkillMoments(
   requestedMode: ReturnType<typeof resolveSkillMomentExecutionMode>,
   result?: SkillMomentRealExecutionResult,
@@ -1796,10 +3303,12 @@ async function runSkillMomentCycle(
   skillMomentCycleLocks.add(lockKey)
   try {
     const runId = args.runId || `moment-run-${Date.now()}-${randomUUID().slice(0, 8)}`
+    let stageControl = normalizeStageControl(args.stageControl)
     const status = (
       phase: SkillMomentRunStatusEvent['phase'],
       message: string,
       detail?: string,
+      extras?: Pick<SkillMomentRunStatusEvent, 'showScore' | 'showEvaluation' | 'demoContract' | 'actorIntents'>,
     ) => emitStatus?.({
       workspaceId: args.workspaceId,
       roomId,
@@ -1807,6 +3316,7 @@ async function runSkillMomentCycle(
       phase,
       message,
       detail,
+      ...extras,
       createdAt: new Date().toISOString(),
     })
     const createdAt = new Date().toISOString()
@@ -1815,23 +3325,44 @@ async function runSkillMomentCycle(
     const momentsPath = join(momentsDir, 'moments.jsonl')
     const criticsPath = join(momentsDir, 'critics.jsonl')
     const runsPath = join(momentsDir, 'runs.jsonl')
+    const stageRunsPath = join(momentsDir, 'stage-runs.jsonl')
+    const worldGraphPath = join(momentsDir, 'world-graph.jsonl')
     const actorStatesPath = join(momentsDir, 'actor-states.jsonl')
     const actorMemoryPath = join(momentsDir, 'actor-memory.jsonl')
-    const sourceDigests = mockSkillMomentSourceDigests(runId, createdAt)
+    const feedbackPath = skillMomentFeedbackPath(workspace.rootPath)
+    const feedbackRecords = await readJsonlRecords<SkillMomentFeedbackRecordInput>(feedbackPath)
+    const acceptedMemoryApplied = stageControl?.humanGate === 'none'
+    const shouldApplyActorMemory = !stageControl || acceptedMemoryApplied
+    const recentWorldGraphSnapshots = await readRecentWorldGraphSnapshots(worldGraphPath, roomId)
     const requestedMode = resolveSkillMomentExecutionMode(args.mode)
     const browserUse = resolveAgentOSBrowserUseCapability()
     const roomPolicy = getSkillCrewRoomPolicy(roomId)
     const isWriterRoom = roomId === WRITER_ROOM_ID
     const debateScenePack = roomId === 'debate' ? getHomelanderFallenGodScenePack() : undefined
-    status('planning', '准备 Skill Moments 房间', `room=${roomId}，mode=${requestedMode}`)
+    status(
+      'planning',
+      stageControl ? '准备受控剧场房间' : '准备 Skill Moments 房间',
+      stageControl
+        ? `room=${roomId}，mode=${requestedMode}，control=${stageControl.controlLevel}，director=${stageControl.directorCommand}`
+        : `room=${roomId}，mode=${requestedMode}`,
+    )
     let eligibleSkills = roomPolicy.orderParticipants(
       (await resolveSkillMomentParticipants(args, workspace.rootPath, roomId))
         .filter((skill) => roomPolicy.shouldAutoInclude(skill)),
     )
+    let stagePlan = stageControl ? buildStageDirectorPlan(stageControl, roomId, eligibleSkills) : undefined
+    if (stageControl && stagePlan) {
+      stageControl = applyStageDirectorPlan(stageControl, stagePlan)
+      stagePlan = buildStageDirectorPlan(stageControl, roomId, eligibleSkills)
+    }
+    eligibleSkills = applyStageControlParticipants(eligibleSkills, stageControl)
+    if (stageControl && eligibleSkills.length === 0) {
+      throw new Error('Stage control activeCast/speakerOrder did not match any eligible skills')
+    }
     if (isWriterRoom && eligibleSkills.length === 0) {
       eligibleSkills = roomPolicy.orderParticipants(defaultSkillMomentParticipants())
     }
-    const maxMoments = isWriterRoom
+    const fallbackMaxMoments = isWriterRoom
       ? Math.min(Math.max(args.maxMoments ?? WRITER_ROOM_MOCK_PHASES.length, 1), WRITER_ROOM_MOCK_PHASES.length)
       : Math.min(Math.max(
         args.maxMoments ?? (debateScenePack
@@ -1843,15 +3374,100 @@ async function runSkillMomentCycle(
           : 3),
         1,
       ), 6)
-    const maxCriticsPerMoment = isWriterRoom
+    const fallbackMaxCriticsPerMoment = isWriterRoom
       ? Math.min(Math.max(args.maxCriticsPerMoment ?? 3, 0), 3)
       : Math.min(Math.max(args.maxCriticsPerMoment ?? 5, 0), 5)
-    const momentPlans = buildDefaultSkillMomentPlans(roomId, eligibleSkills, maxMoments, runId)
-    status(
-      'planning',
-      '已规划本轮出场顺序',
-      momentPlans.map((plan) => plan.author.name || plan.author.handle).join('、'),
+    const scheduleFeedbackCalibration = buildSkillMomentShowFeedbackCalibration({
+      baseScore: 0.5,
+      roomId,
+      feedbackRecords,
+      sourcePath: feedbackPath,
+    })
+    const dramaSchedule = buildDramaSchedule({
+      runId,
+      roomId,
+      stageControl,
+      stagePlan,
+      worldGraphSnapshots: recentWorldGraphSnapshots,
+      eligibleSkills,
+      fallbackMaxMoments,
+      fallbackMaxCriticsPerMoment,
+      feedbackCalibration: scheduleFeedbackCalibration,
+    })
+    eligibleSkills = applyDramaScheduleParticipants(eligibleSkills, dramaSchedule)
+    const maxMoments = isWriterRoom
+      ? fallbackMaxMoments
+      : Math.min(Math.max(
+        stageControl?.maxMoments ?? args.maxMoments ?? dramaSchedule.recommendedMaxMoments ?? fallbackMaxMoments,
+        1,
+      ), 6)
+    const maxCriticsPerMoment = isWriterRoom
+      ? fallbackMaxCriticsPerMoment
+      : Math.min(Math.max(
+        stageControl?.maxCriticsPerMoment ?? args.maxCriticsPerMoment ?? dramaSchedule.recommendedMaxCriticsPerMoment ?? fallbackMaxCriticsPerMoment,
+        0,
+      ), 5)
+    const worldGraphMemoryDigest = buildWorldGraphMemoryDigest(runId, createdAt, roomId, recentWorldGraphSnapshots)
+    const sourceDigests = [
+      ...(stageControl ? [stageControlSourceDigest(runId, createdAt, stageControl, stagePlan)] : []),
+      ...(worldGraphMemoryDigest ? [worldGraphMemoryDigest] : []),
+      ...mockSkillMomentSourceDigests(runId, createdAt),
+    ]
+    const demoContract: SkillMomentDemoContract = buildSkillMomentDemoContract({
+      roomId,
+      stageControl,
+      stagePlan,
+      dramaSchedule,
+      feedbackCalibration: scheduleFeedbackCalibration,
+      mediaEnabled: browserUse.enabled && stageControl?.mediaPolicy !== 'disabled',
+    })
+    const actorIntents: SkillMomentActorIntentCard[] = buildSkillMomentActorIntentCards({
+      skills: eligibleSkills,
+      stagePlan,
+      dramaSchedule,
+      demoContract,
+      feedbackCalibration: scheduleFeedbackCalibration,
+      mediaEnabled: browserUse.enabled && stageControl?.mediaPolicy !== 'disabled',
+    })
+    const momentPlans = buildDefaultSkillMomentPlans(
+      roomId,
+      eligibleSkills,
+      maxMoments,
+      runId,
+      dramaSchedule.prioritizedActorSlugs,
     )
+    if (stageControl) {
+      await appendJsonlRecord(stageRunsPath, {
+	        schemaVersion: 1,
+	        runId,
+	        workspaceId: args.workspaceId,
+	        roomId,
+	        stageControl,
+	        stagePlan,
+	        dramaSchedule,
+	        demoContract,
+	        actorIntents,
+	        plannedCast: eligibleSkills.map((skill) => ({
+	          id: skill.id,
+	          name: skill.name,
+	          handle: skill.handle,
+	          slug: normalizeSkillMomentSlug(skill),
+	        })),
+        maxMoments,
+        maxCriticsPerMoment,
+        startedAt: createdAt,
+        status: 'started',
+      })
+    }
+	    status(
+	      'planning',
+	      '已规划本轮出场顺序',
+	      `${momentPlans.map((plan) => plan.author.name || plan.author.handle).join('、')}${stageControl ? `；导演命令：${stageControl.directorCommand}${stagePlan?.schedulerNotes.length ? `；${stagePlan.schedulerNotes.join('；')}` : ''}` : ''}${dramaSchedule.notes.length ? `；调度：${dramaSchedule.notes.join('；')}` : ''}`,
+	      {
+	        demoContract,
+	        actorIntents,
+	      },
+	    )
     const writerRoomPhase: WriterRoomPhase | undefined = isWriterRoom
       ? momentPlans[momentPlans.length - 1]?.artifactKind ?? 'continuity_report'
       : undefined
@@ -1870,8 +3486,12 @@ async function runSkillMomentCycle(
     let realWorkingDirectory = workspace.rootPath
     let actorMemoryRecords: SkillActorMemoryRecord[] = []
     let actorMemoryRecordCount = 0
+    let worldGraphMemoryRecordCount = 0
     let actorCritiqueDecisionCount = 0
     let actorCritiqueStateUpdateCount = 0
+    const draftActorStates: SkillMomentActorStateDraft[] = []
+    const draftActorMemory: SkillActorMemoryRecord[] = []
+    const actorSilences: SkillMomentActorSilenceEvent[] = []
     if (requestedMode === 'real') {
       status('writing', '调用真实 skill 执行', '每个 skill 会读取自己的 SKILL.md 并决定发言或沉默。')
       realInstructions = await loadSkillMomentInstructions(workspace.rootPath, args.workingDirectory)
@@ -1879,6 +3499,16 @@ async function runSkillMomentCycle(
         ? args.workingDirectory
         : workspace.rootPath
       actorMemoryRecords = await readJsonlRecords<SkillActorMemoryRecord>(actorMemoryPath)
+      const worldGraphActorMemoryRecords = buildWorldGraphActorMemoryRecords({
+        snapshots: recentWorldGraphSnapshots,
+        workspaceId: args.workspaceId,
+        roomId,
+        runId,
+        createdAt,
+        skills: eligibleSkills,
+      })
+      actorMemoryRecords = [...worldGraphActorMemoryRecords, ...actorMemoryRecords]
+      worldGraphMemoryRecordCount = worldGraphActorMemoryRecords.length
 
       realExecutionResult = await executeRealSkillMomentPlans({
         plans: momentPlans,
@@ -1904,34 +3534,25 @@ async function runSkillMomentCycle(
         mainLog.warn('Skill Moments real mode unavailable; falling back to mock cycle:', realExecutionResult.errors.join('; '))
       }
       for (const decision of realExecutionResult.decisions) {
-        await appendJsonlRecord(actorStatesPath, {
-          schemaVersion: 1,
-          runId,
-          workspaceId: args.workspaceId,
-          roomId,
-          planIndex: decision.planIndex,
-          skillId: decision.author.id,
-          skillName: decision.author.name,
-          handle: decision.author.handle,
-          decision: decision.decision,
-          reason: decision.reason,
-          body: decision.body,
-          mediaPrompt: decision.mediaPrompt,
-          stateUpdates: decision.stateUpdates ?? [],
-          createdAt,
-        })
-        const memoryRecords = buildSkillActorMemoryRecords({
+        if (decision.decision === 'silence') {
+          actorSilences.push({
+            actor: decision.author,
+            reason: decision.reason,
+          })
+        }
+        actorMemoryRecordCount += await persistOrDraftSkillActorDecision({
           decision,
           workspaceId: args.workspaceId,
           roomId,
           runId,
           createdAt,
+          shouldApplyActorMemory,
+          actorStatesPath,
+          actorMemoryPath,
+          actorMemoryRecords,
+          draftActorStates,
+          draftActorMemory,
         })
-        for (const memoryRecord of memoryRecords) {
-          await appendJsonlRecord(actorMemoryPath, memoryRecord)
-          actorMemoryRecords.push(memoryRecord)
-          actorMemoryRecordCount += 1
-        }
       }
     }
 
@@ -1963,7 +3584,7 @@ async function runSkillMomentCycle(
       }))
       : momentPlans.map((plan, index) => {
         const digest = sourceDigests[index % sourceDigests.length]!
-        const publication = buildMockMomentPublication(plan.author, digest, index, roomId, plan.artifactKind, runId)
+        const publication = buildMockMomentPublication(plan.author, digest, index, roomId, plan.artifactKind, runId, stageControl)
         return {
           planIndex: index,
           author: plan.author,
@@ -2056,35 +3677,27 @@ async function runSkillMomentCycle(
         for (const decision of critiqueExecution.decisions) {
           actorCritiqueDecisionCount += 1
           actorCritiqueStateUpdateCount += decision.stateUpdates?.length ?? 0
-          await appendJsonlRecord(actorStatesPath, {
-            schemaVersion: 1,
-            runId,
-            workspaceId: args.workspaceId,
-            roomId,
-            planIndex: decision.planIndex,
-            target: decision.target,
-            skillId: decision.author.id,
-            skillName: decision.author.name,
-            handle: decision.author.handle,
-            decision: decision.decision,
-            reason: decision.reason,
-            body: decision.body,
-            mediaPrompt: decision.mediaPrompt,
-            stateUpdates: decision.stateUpdates ?? [],
-            createdAt,
-          })
-          const memoryRecords = buildSkillActorMemoryRecords({
+          if (decision.decision === 'silence') {
+            actorSilences.push({
+              actor: decision.author,
+              targetMomentId: decision.target?.momentId,
+              targetCritiqueId: decision.target?.critiqueId,
+              reason: decision.reason,
+            })
+          }
+          actorMemoryRecordCount += await persistOrDraftSkillActorDecision({
             decision,
             workspaceId: args.workspaceId,
             roomId,
             runId,
             createdAt,
+            shouldApplyActorMemory,
+            actorStatesPath,
+            actorMemoryPath,
+            actorMemoryRecords,
+            draftActorStates,
+            draftActorMemory,
           })
-          for (const memoryRecord of memoryRecords) {
-            await appendJsonlRecord(actorMemoryPath, memoryRecord)
-            actorMemoryRecords.push(memoryRecord)
-            actorMemoryRecordCount += 1
-          }
         }
         critics = critiqueExecution.publications
           .flatMap((publication: SkillMomentRealCritiquePublication, critiqueIndex): SkillMomentCritique[] => {
@@ -2171,32 +3784,34 @@ async function runSkillMomentCycle(
       if (!useRealMoments && counterReply && roomPolicy.shouldKeepCritique(author, author, counterReply.body)) {
         critics = [...critics, counterReply]
       }
-      const mediaResult = output.mediaPrompt
-        ? await maybeGenerateSkillActorRequestedMedia({
-          author,
-          body,
-          mediaPrompt: output.mediaPrompt,
-          roomId,
-          momentId,
-          momentsDir,
-          createdAt,
-          browserUse,
-          emitStatus,
-          workspaceId: args.workspaceId,
-          runId,
-        })
-        : await maybeGenerateHomelanderMomentMedia({
-          author,
-          body,
-          roomId,
-          momentId,
-          momentsDir,
-          createdAt,
-          browserUse,
-          emitStatus,
-          workspaceId: args.workspaceId,
-          runId,
-        })
+      const mediaResult: { media: SkillMomentMedia[]; source?: SkillMomentSourceDigest; error?: string } = stageControl?.mediaPolicy === 'disabled'
+        ? { media: [] }
+        : output.mediaPrompt
+          ? await maybeGenerateSkillActorRequestedMedia({
+            author,
+            body,
+            mediaPrompt: output.mediaPrompt,
+            roomId,
+            momentId,
+            momentsDir,
+            createdAt,
+            browserUse,
+            emitStatus,
+            workspaceId: args.workspaceId,
+            runId,
+          })
+          : await maybeGenerateHomelanderMomentMedia({
+            author,
+            body,
+            roomId,
+            momentId,
+            momentsDir,
+            createdAt,
+            browserUse,
+            emitStatus,
+            workspaceId: args.workspaceId,
+            runId,
+          })
       if (mediaResult.source) {
         await appendJsonlRecord(sourceDigestsPath, mediaResult.source)
       }
@@ -2227,6 +3842,7 @@ async function runSkillMomentCycle(
         artifacts: output.mode === 'real'
           ? [
             ...realSkillMomentArtifacts(artifactKind),
+            ...stageControlArtifacts(stageControl),
             output.decision ? `actor_decision:${output.decision}` : undefined,
             output.mediaPrompt ? 'actor_media_request' : undefined,
             mediaResult.media.length > 0 ? 'agentos_browser_media' : undefined,
@@ -2235,6 +3851,7 @@ async function runSkillMomentCycle(
             ? ['writer_room_mock_moment', writerArtifactTag(artifactKind)]
             : compactUniqueArtifacts([
               'agentos_mock_moment',
+              ...stageControlArtifacts(stageControl),
               ...(output.artifacts ?? [attachSourceDigest ? 'source_digest_mock' : 'persona_scene_moment']),
               output.sceneBeat ? 'homelander_fallen_god_scene_pack' : undefined,
               body.includes('仅') ? 'private_visibility_mock' : undefined,
@@ -2263,7 +3880,51 @@ async function runSkillMomentCycle(
       moments.push(moment)
     }
 
-    status('persisting', '写入 Skill Moments JSONL', `${moments.length} 条主贴，${moments.reduce((count, moment) => count + moment.critiques.length, 0)} 条评论。`)
+    if (!useRealMoments) {
+      appendMockActorSilences({
+        eligibleSkills,
+        moments,
+        actorSilences,
+      })
+    }
+
+    const worldGraphSnapshot = buildSkillMomentWorldGraphSnapshot({
+      runId,
+      workspaceId: args.workspaceId,
+      roomId,
+      createdAt,
+      stageControl,
+      stagePlan,
+      acceptedMemoryApplied: shouldApplyActorMemory,
+      eligibleSkills,
+      moments,
+      sourceDigests,
+      actorSilences,
+    })
+    await appendJsonlRecord(worldGraphPath, worldGraphSnapshot)
+    const baseShowEvaluation = buildSkillMomentShowEvaluation({
+      moments,
+      eligibleSkills,
+      stageControl,
+      stagePlan,
+      dramaSchedule,
+      mediaErrors,
+      browserUse,
+      actorSilences,
+    })
+    const feedbackCalibration = buildSkillMomentShowFeedbackCalibration({
+      baseScore: baseShowEvaluation.overallScore,
+      roomId,
+      feedbackRecords,
+      sourcePath: feedbackPath,
+    })
+    const showEvaluation = applySkillMomentShowFeedbackCalibration(baseShowEvaluation, feedbackCalibration)
+    const showStatusPayload = {
+      showScore: showEvaluation.overallScore,
+      showEvaluation,
+    }
+
+    status('persisting', '写入 Skill Moments JSONL', `${moments.length} 条主贴，${moments.reduce((count, moment) => count + moment.critiques.length, 0)} 条评论；world graph ${worldGraphSnapshot.nodes.length} 节点/${worldGraphSnapshot.edges.length} 边。`, showStatusPayload)
     await appendJsonlRecord(runsPath, {
       schemaVersion: 1,
       runId,
@@ -2281,6 +3942,30 @@ async function runSkillMomentCycle(
       actorCritiqueDecisionCount,
       actorCritiqueStateUpdateCount,
       actorMemoryRecordCount,
+      worldGraphMemoryRecordCount,
+      acceptedMemoryApplied: stageControl ? acceptedMemoryApplied : undefined,
+      actorStateDraftRecordCount: draftActorStates.length,
+      actorMemoryDraftRecordCount: draftActorMemory.length,
+      draftActorStates: stageControl && draftActorStates.length > 0 ? draftActorStates : undefined,
+      draftActorMemory: stageControl && draftActorMemory.length > 0 ? draftActorMemory : undefined,
+      stageControl: stageControl ? {
+        stageId: stageControl.stageId,
+        controlLevel: stageControl.controlLevel,
+        sceneType: stageControl.sceneType,
+        conflictTarget: stageControl.conflictTarget,
+        mediaPolicy: stageControl.mediaPolicy,
+        humanGate: stageControl.humanGate,
+        directorCommand: stageControl.directorCommand,
+      } : undefined,
+      stagePlan,
+      dramaSchedule,
+      demoContract,
+      actorIntents,
+      showScore: showEvaluation.overallScore,
+      showScoreBase: feedbackCalibration.baseScore,
+      showScoreFeedbackAdjustment: feedbackCalibration.adjustment,
+      showScoreFeedbackCalibration: feedbackCalibration,
+      showEvaluation,
       browserUse: {
         enabled: browserUse.enabled,
         provider: browserUse.provider,
@@ -2292,6 +3977,9 @@ async function runSkillMomentCycle(
         reason: browserUse.reason,
       },
       sourceDigestCount: sourceDigests.length,
+      worldGraphMemoryDigestAttached: Boolean(worldGraphMemoryDigest),
+      worldGraphNodeCount: worldGraphSnapshot.nodes.length,
+      worldGraphEdgeCount: worldGraphSnapshot.edges.length,
       ...(writerRoomPhase ? {
         phase: writerRoomPhase,
         artifactCount: moments.length,
@@ -2303,7 +3991,42 @@ async function runSkillMomentCycle(
       mediaErrors: mediaErrors.length > 0 ? mediaErrors.slice(0, 5) : undefined,
       status: 'success',
     })
-    status('complete', '本轮朋友圈已完成', `生成 ${moments.length} 条主贴。`)
+    if (stageControl) {
+      await appendJsonlRecord(stageRunsPath, {
+        schemaVersion: 1,
+        runId,
+        workspaceId: args.workspaceId,
+        roomId,
+        stageId: stageControl.stageId,
+        controlLevel: stageControl.controlLevel,
+        sceneType: stageControl.sceneType,
+        humanGate: stageControl.humanGate,
+        acceptedMemoryApplied,
+        draftActorStateCount: draftActorStates.length,
+        draftActorMemoryCount: draftActorMemory.length,
+        draftActorStates: draftActorStates.length > 0 ? draftActorStates : undefined,
+	        draftActorMemory: draftActorMemory.length > 0 ? draftActorMemory : undefined,
+	        stagePlan,
+	        dramaSchedule,
+	        demoContract,
+	        actorIntents,
+	        showScore: showEvaluation.overallScore,
+        showScoreBase: feedbackCalibration.baseScore,
+        showScoreFeedbackAdjustment: feedbackCalibration.adjustment,
+        showScoreFeedbackCalibration: feedbackCalibration,
+        showEvaluation,
+        worldGraphMemoryDigestAttached: Boolean(worldGraphMemoryDigest),
+        worldGraphMemoryRecordCount,
+        worldGraphNodeCount: worldGraphSnapshot.nodes.length,
+        worldGraphEdgeCount: worldGraphSnapshot.edges.length,
+        momentCount: moments.length,
+        criticCount: moments.reduce((count, moment) => count + moment.critiques.length, 0),
+        mediaCount: moments.reduce((count, moment) => count + (moment.media?.length ?? 0), 0),
+        endedAt: new Date().toISOString(),
+        status: 'success',
+      })
+    }
+    status('complete', '本轮朋友圈已完成', `生成 ${moments.length} 条主贴。`, showStatusPayload)
 
     return {
       success: true,

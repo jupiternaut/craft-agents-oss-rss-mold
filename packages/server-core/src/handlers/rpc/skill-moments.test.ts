@@ -1,13 +1,22 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
-import { mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { HandlerFn, RequestContext, RpcServer } from '../../transport'
 import type { HandlerDeps } from '../handler-deps'
+import { skillMomentRunJobsPath } from '../../skill-moments'
 
 let workspaceRoot = ''
+
+type PersistedRunJobAuditRecord = {
+  reason: string
+  job: {
+    runId: string
+    state: string
+  }
+}
 
 mock.module('@craft-agent/shared/config', () => ({
   getWorkspaceByNameOrId: (workspaceId: string) => (
@@ -42,6 +51,32 @@ function createDeps(overrides?: Partial<HandlerDeps>): HandlerDeps {
   }
 }
 
+function readRunJobAuditRecords(root: string): PersistedRunJobAuditRecord[] {
+  return readFileSync(skillMomentRunJobsPath(root), 'utf-8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as PersistedRunJobAuditRecord)
+}
+
+async function waitForRunJobAuditRecords(
+  root: string,
+  predicate: (records: PersistedRunJobAuditRecord[]) => boolean,
+): Promise<PersistedRunJobAuditRecord[]> {
+  const startedAt = Date.now()
+  let records: PersistedRunJobAuditRecord[] = []
+  while (Date.now() - startedAt < 1_000) {
+    if (existsSync(skillMomentRunJobsPath(root))) {
+      records = readRunJobAuditRecords(root)
+      if (predicate(records)) {
+        return records
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error(`Timed out waiting for run job audit records. Last records: ${JSON.stringify(records)}`)
+}
+
 async function createHarness(deps: HandlerDeps) {
   const handlers = new Map<string, HandlerFn>()
   const pushCalls: Array<{ channel: string; target: unknown; args: unknown[] }> = []
@@ -68,6 +103,18 @@ async function createHarness(deps: HandlerDeps) {
   if (!runCycle) {
     throw new Error('RUN_CYCLE handler not registered')
   }
+  const getRunJob = handlers.get(RPC_CHANNELS.skillMoments.GET_RUN_JOB)
+  if (!getRunJob) {
+    throw new Error('GET_RUN_JOB handler not registered')
+  }
+  const listRunJobs = handlers.get(RPC_CHANNELS.skillMoments.LIST_RUN_JOBS)
+  if (!listRunJobs) {
+    throw new Error('LIST_RUN_JOBS handler not registered')
+  }
+  const waitRunJob = handlers.get(RPC_CHANNELS.skillMoments.WAIT_RUN_JOB)
+  if (!waitRunJob) {
+    throw new Error('WAIT_RUN_JOB handler not registered')
+  }
   const recordFeedback = handlers.get(RPC_CHANNELS.skillMoments.RECORD_FEEDBACK)
   if (!recordFeedback) {
     throw new Error('RECORD_FEEDBACK handler not registered')
@@ -85,7 +132,17 @@ async function createHarness(deps: HandlerDeps) {
     workspaceId: 'workspace-1',
     webContentsId: 101,
   }
-  return { runCycle, recordFeedback, listEvolutionCandidates, reviewEvolutionCandidate, ctx, pushCalls }
+  return {
+    runCycle,
+    getRunJob,
+    listRunJobs,
+    waitRunJob,
+    recordFeedback,
+    listEvolutionCandidates,
+    reviewEvolutionCandidate,
+    ctx,
+    pushCalls,
+  }
 }
 
 describe('registerSkillMomentsHandlers RUN_CYCLE', () => {
@@ -154,6 +211,249 @@ describe('registerSkillMomentsHandlers RUN_CYCLE', () => {
     }
   })
 
+  it('gets, lists, and waits for run jobs through RPC handlers', async () => {
+    try {
+      const {
+        runCycle,
+        getRunJob,
+        listRunJobs,
+        waitRunJob,
+        ctx,
+      } = await createHarness(createDeps({
+        skillMomentRunCycleExecutor: async (input, emitStatus) => {
+          emitStatus({
+            workspaceId: input.workspaceId,
+            roomId: input.roomId || 'debate',
+            runId: input.runId,
+            phase: 'writing',
+            message: 'writing',
+            createdAt: new Date().toISOString(),
+          })
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          return {
+            success: true,
+            runId: input.runId!,
+            moments: [],
+            sourceDigests: [],
+            path: workspaceRoot,
+          }
+        },
+      }))
+
+      await runCycle(ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+        runId: 'rpc-run-1',
+      })
+
+      const waited = await waitRunJob(ctx, {
+        workspaceId: 'workspace-1',
+        runId: 'rpc-run-1',
+        timeoutMs: 1_000,
+      }) as { job: { runId: string; state: string; eventCount: number } }
+      expect(waited.job).toMatchObject({
+        runId: 'rpc-run-1',
+        state: 'succeeded',
+        eventCount: 3,
+      })
+
+      const got = await getRunJob(ctx, {
+        workspaceId: 'workspace-1',
+        runId: 'rpc-run-1',
+      }) as { job?: { runId: string; state: string } }
+      expect(got.job).toMatchObject({
+        runId: 'rpc-run-1',
+        state: 'succeeded',
+      })
+
+      const listed = await listRunJobs(ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+        limit: 10,
+      }) as { jobs: Array<{ runId: string; state: string }> }
+      expect(listed.jobs.map((job) => job.runId)).toEqual(['rpc-run-1'])
+
+      const restarted = await createHarness(createDeps())
+      const recoveredList = await restarted.listRunJobs(ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+      }) as { jobs: Array<{ runId: string; state: string }> }
+      expect(recoveredList.jobs).toHaveLength(1)
+      expect(recoveredList.jobs[0]).toMatchObject({
+        runId: 'rpc-run-1',
+        state: 'succeeded',
+      })
+
+      const recoveredWait = await restarted.waitRunJob(ctx, {
+        workspaceId: 'workspace-1',
+        runId: 'rpc-run-1',
+      }) as { job: { runId: string; state: string } }
+      expect(recoveredWait.job).toMatchObject({
+        runId: 'rpc-run-1',
+        state: 'succeeded',
+      })
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers unfinished run jobs through RPC handlers after restart', async () => {
+    try {
+      const first = await createHarness(createDeps({
+        skillMomentRunCycleExecutor: async () => await new Promise<never>(() => {}),
+      }))
+
+      await first.runCycle(first.ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+        runId: 'rpc-unfinished-run-1',
+      })
+
+      await waitForRunJobAuditRecords(workspaceRoot, (records) => records.some((record) => (
+        record.job.runId === 'rpc-unfinished-run-1' && record.job.state === 'running'
+      )))
+
+      const restarted = await createHarness(createDeps())
+      const listed = await restarted.listRunJobs(restarted.ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+      }) as {
+        jobs: Array<{
+          runId: string
+          state: string
+          recovered?: boolean
+          recovery?: { code: string; source: string; previousState: string; recoveredAt: string }
+          failure?: { code?: string; message: string }
+        }>
+      }
+
+      expect(listed.jobs).toHaveLength(1)
+      expect(listed.jobs[0]).toMatchObject({
+        runId: 'rpc-unfinished-run-1',
+        state: 'failed',
+        recovered: true,
+        recovery: {
+          code: 'recovered_without_executor',
+          source: 'run-jobs.jsonl',
+          previousState: 'running',
+        },
+        failure: {
+          code: 'recovered_without_executor',
+        },
+      })
+
+      const waited = await restarted.waitRunJob(restarted.ctx, {
+        workspaceId: 'workspace-1',
+        runId: 'rpc-unfinished-run-1',
+        timeoutMs: 10,
+      }) as { job: { runId: string; state: string; failure?: { code?: string } } }
+      expect(waited.job).toMatchObject({
+        runId: 'rpc-unfinished-run-1',
+        state: 'failed',
+        failure: {
+          code: 'recovered_without_executor',
+        },
+      })
+
+      const got = await restarted.getRunJob(restarted.ctx, {
+        workspaceId: 'workspace-1',
+        runId: 'rpc-unfinished-run-1',
+      }) as { job?: { recovered?: boolean; recovery?: { recoveredAt: string } } }
+      expect(got.job?.recovered).toBe(true)
+      expect(got.job?.recovery?.recoveredAt).toBe(listed.jobs[0]!.recovery?.recoveredAt)
+
+      const records = await waitForRunJobAuditRecords(workspaceRoot, (auditRecords) => auditRecords.some((record) => (
+        record.reason === 'recovery' && record.job.runId === 'rpc-unfinished-run-1'
+      )))
+      expect(records.at(-1)?.job.state).toBe('failed')
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('restarts unfinished run jobs through RPC handlers when an executor is configured after restart', async () => {
+    try {
+      const first = await createHarness(createDeps({
+        skillMomentRunCycleExecutor: async () => await new Promise<never>(() => {}),
+      }))
+
+      await first.runCycle(first.ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+        runId: 'rpc-restartable-run-1',
+      })
+
+      await waitForRunJobAuditRecords(workspaceRoot, (records) => records.some((record) => (
+        record.job.runId === 'rpc-restartable-run-1' && record.job.state === 'running'
+      )))
+
+      const restarted = await createHarness(createDeps({
+        skillMomentRunCycleExecutor: async (input, emitStatus) => {
+          emitStatus({
+            workspaceId: input.workspaceId,
+            roomId: input.roomId || 'debate',
+            runId: input.runId,
+            phase: 'writing',
+            message: 'restarted through rpc',
+            createdAt: new Date().toISOString(),
+          })
+          return {
+            success: true,
+            runId: input.runId!,
+            moments: [],
+            sourceDigests: [],
+            path: workspaceRoot,
+          }
+        },
+      }))
+
+      const listed = await restarted.listRunJobs(restarted.ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+      }) as {
+        jobs: Array<{
+          runId: string
+          recovered?: boolean
+          recovery?: { code: string; previousState: string }
+        }>
+      }
+      expect(listed.jobs).toHaveLength(1)
+      expect(listed.jobs[0]).toMatchObject({
+        runId: 'rpc-restartable-run-1',
+        recovered: true,
+        recovery: {
+          code: 'restarted_from_audit',
+          previousState: 'running',
+        },
+      })
+
+      const waited = await restarted.waitRunJob(restarted.ctx, {
+        workspaceId: 'workspace-1',
+        runId: 'rpc-restartable-run-1',
+        timeoutMs: 1_000,
+      }) as {
+        job: {
+          runId: string
+          state: string
+          recovered?: boolean
+          recovery?: { code: string }
+          events: Array<{ phase: string; message: string }>
+        }
+      }
+      expect(waited.job).toMatchObject({
+        runId: 'rpc-restartable-run-1',
+        state: 'succeeded',
+        recovered: true,
+        recovery: {
+          code: 'restarted_from_audit',
+        },
+      })
+      expect(waited.job.events.some((event) => event.message === 'restarted through rpc')).toBe(true)
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
   it('fails fast when no run-cycle executor is configured', async () => {
     try {
       const { runCycle, ctx } = await createHarness(createDeps())
@@ -162,6 +462,83 @@ describe('registerSkillMomentsHandlers RUN_CYCLE', () => {
         workspaceId: 'workspace-1',
         roomId: 'debate',
       })).rejects.toThrow('executor is not configured')
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('passes the complete stage control input to the run-cycle executor', async () => {
+    try {
+      const stageControl = {
+        schemaVersion: 1,
+        stageId: 'stage-1',
+        controlLevel: 'human_guided',
+        sceneType: 'edict_council',
+        directorCommand: '祖国人先发难，Butcher 只用一句话回击。',
+        activeCast: ['homelander', 'butcher', 'starlight'],
+        speakerOrder: ['homelander', 'butcher'],
+        conflictTarget: 'public loyalty test',
+        mediaPolicy: 'allow_actor_requested_images',
+        humanGate: 'before_persist',
+        maxMoments: 2,
+        maxCriticsPerMoment: 1,
+      } as const
+      let receivedInput: unknown
+      let resolveReceived: () => void = () => {}
+      const received = new Promise<void>((resolve) => {
+        resolveReceived = resolve
+      })
+      const { runCycle, ctx } = await createHarness(createDeps({
+        skillMomentRunCycleExecutor: async (input) => {
+          receivedInput = input
+          resolveReceived()
+          return {
+            success: true,
+            runId: input.runId!,
+            moments: [],
+            sourceDigests: [],
+            path: workspaceRoot,
+          }
+        },
+      }))
+
+      const result = await runCycle(ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'stage-room',
+        runId: 'stage-run-1',
+        mode: 'real',
+        stageControl,
+        skillSlugs: ['homelander', 'butcher'],
+        skills: [
+          { id: 'homelander', name: '祖国人', handle: '@homelander' },
+          { id: 'butcher', name: 'Butcher', handle: '@butcher' },
+        ],
+        workingDirectory: '/workspace/story-room',
+        maxMoments: 8,
+        maxCriticsPerMoment: 4,
+      })
+      await received
+
+      expect(result).toMatchObject({
+        success: true,
+        runId: 'stage-run-1',
+        state: 'started',
+      })
+      expect(receivedInput).toEqual({
+        workspaceId: 'workspace-1',
+        roomId: 'stage-room',
+        runId: 'stage-run-1',
+        mode: 'real',
+        stageControl,
+        skillSlugs: ['homelander', 'butcher'],
+        skills: [
+          { id: 'homelander', name: '祖国人', handle: '@homelander' },
+          { id: 'butcher', name: 'Butcher', handle: '@butcher' },
+        ],
+        workingDirectory: '/workspace/story-room',
+        maxMoments: 8,
+        maxCriticsPerMoment: 4,
+      })
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true })
     }

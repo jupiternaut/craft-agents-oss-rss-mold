@@ -4,6 +4,7 @@ import { Loader2, MessageCircle } from 'lucide-react'
 import type {
   SkillFeedbackVerdict,
   SkillMoment,
+  SkillMomentStageControl,
 } from '../../../../shared/types'
 import { AgentOSControlBar } from './AgentOSControlBar'
 import { MomentCard } from './MomentCard'
@@ -15,6 +16,7 @@ import type {
 type SkillMomentsViewProps = {
   mode: 'moments' | 'agentos'
   workspaceId?: string
+  roomId: string
   roomLabel: string
   moments: SkillMoment[]
   roles: SkillMomentRole[]
@@ -22,13 +24,15 @@ type SkillMomentsViewProps = {
   running: boolean
   lastRunPath?: string
   pendingFeedbackKey?: string
-  onRefresh: () => void
+  onReload: () => void
+  onGenerate: (stageControl?: SkillMomentStageControl) => void
   onFeedback: (target: SkillMomentFeedbackTarget, verdict: SkillFeedbackVerdict) => void
 }
 
 export function SkillMomentsView({
   mode,
   workspaceId,
+  roomId,
   roomLabel,
   moments,
   roles,
@@ -36,7 +40,8 @@ export function SkillMomentsView({
   running,
   lastRunPath,
   pendingFeedbackKey,
-  onRefresh,
+  onReload,
+  onGenerate,
   onFeedback,
 }: SkillMomentsViewProps) {
   const criticCount = React.useMemo(
@@ -48,13 +53,16 @@ export function SkillMomentsView({
     <div className="flex h-full min-h-0 flex-col bg-background">
       <AgentOSControlBar
         roomLabel={roomLabel}
+        roomId={roomId}
         mode={mode}
         running={running}
         loading={loading}
         momentCount={moments.length}
         criticCount={criticCount}
         lastRunPath={lastRunPath}
-        onRefresh={onRefresh}
+        roles={roles}
+        onReload={onReload}
+        onGenerate={onGenerate}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -72,7 +80,7 @@ export function SkillMomentsView({
                 <MessageCircle className="size-5" />
               </div>
               <div className="mt-3 text-sm font-medium text-foreground">暂无朋友圈</div>
-              <div className="mt-1 text-xs">点击刷新朋友圈生成本地 AgentOS cycle。</div>
+              <div className="mt-1 text-xs">生成一轮会启动 AgentOS；刷新列表只读取已保存内容。</div>
             </div>
           ) : null}
 
