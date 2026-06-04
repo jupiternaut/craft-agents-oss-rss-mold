@@ -269,6 +269,12 @@ export const RPC_CHANNELS = {
     OPEN_FINDER: 'skills:openFinder',
     CHANGED: 'skills:changed',
   },
+  skillMoments: {
+    LIST: 'skill-moments:list',
+    RUN_CYCLE: 'skill-moments:run-cycle',
+    RUN_STATUS: 'skill-moments:run-status',
+    RECORD_FEEDBACK: 'skill-moments:record-feedback',
+  },
   statuses: {
     LIST: 'statuses:list',
     REORDER: 'statuses:reorder',

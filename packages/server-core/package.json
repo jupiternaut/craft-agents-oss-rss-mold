@@ -11,6 +11,7 @@
     "./transport": "./src/transport/index.ts",
     "./runtime": "./src/runtime/index.ts",
     "./handlers": "./src/handlers/index.ts",
+    "./skill-moments": "./src/skill-moments/index.ts",
     "./bootstrap": "./src/bootstrap/index.ts",
     "./model-fetchers": "./src/model-fetchers/index.ts",
     "./domain": "./src/domain/index.ts",

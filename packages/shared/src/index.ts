@@ -30,4 +30,5 @@
 
 // Export branding (standalone, no dependencies)
 export * from './branding.ts';
+export * from './skill-moments/index.ts';
 export * from './writer-room/index.ts';

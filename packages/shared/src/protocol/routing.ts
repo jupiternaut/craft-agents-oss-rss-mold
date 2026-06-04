@@ -375,6 +375,12 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.skills.DELETE,
   RPC_CHANNELS.skills.CHANGED,
 
+  // skill moments — workspace-owned JSONL feed and stage orchestration
+  RPC_CHANNELS.skillMoments.LIST,
+  RPC_CHANNELS.skillMoments.RUN_CYCLE,
+  RPC_CHANNELS.skillMoments.RUN_STATUS,
+  RPC_CHANNELS.skillMoments.RECORD_FEEDBACK,
+
   // statuses — workspace metadata
   RPC_CHANNELS.statuses.LIST,
   RPC_CHANNELS.statuses.REORDER,

@@ -238,6 +238,11 @@ export const CHANNEL_MAP = {
   openSkillInFinder: invoke(RPC_CHANNELS.skills.OPEN_FINDER),
   onSkillsChanged: listener(RPC_CHANNELS.skills.CHANGED),
 
+  // Skill Moments read/write paths. The long-running cycle remains direct IPC
+  // until the server-side job runner is split out of Electron/Brave orchestration.
+  listSkillMoments: invoke(RPC_CHANNELS.skillMoments.LIST),
+  recordSkillMomentFeedback: invoke(RPC_CHANNELS.skillMoments.RECORD_FEEDBACK),
+
   // Statuses
   listStatuses: invoke(RPC_CHANNELS.statuses.LIST),
   reorderStatuses: invoke(RPC_CHANNELS.statuses.REORDER),
