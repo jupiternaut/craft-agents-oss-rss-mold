@@ -73,6 +73,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function isChatGptTargetUrl(url: string | undefined): boolean {
+  if (!url) return false
+
+  try {
+    const hostname = new URL(url).hostname.toLocaleLowerCase()
+    return hostname === 'chatgpt.com' || hostname.endsWith('.chatgpt.com')
+  } catch {
+    return url.includes('chatgpt.com')
+  }
+}
+
+function summarizeCdpTargets(targets: BraveCdpTarget[]): string {
+  const pageTargets = targets.filter((target) => target.type === 'page')
+  if (pageTargets.length === 0) {
+    return 'no page targets'
+  }
+
+  const preview = pageTargets
+    .slice(0, 4)
+    .map((target) => {
+      const title = (target.title || 'untitled').replace(/\s+/g, ' ').slice(0, 48)
+      const url = (target.url || 'about:blank').slice(0, 96)
+      return `${title} <${url}>`
+    })
+    .join('; ')
+  const extra = pageTargets.length > 4 ? `; +${pageTargets.length - 4} more` : ''
+  return `${pageTargets.length} page target(s): ${preview}${extra}`
+}
+
 function launchBraveWithDebugging(args: {
   executablePath: string
   profileDir: string
@@ -328,15 +357,22 @@ function chatGptTargetStateExpression(): string {
   })()`
 }
 
-async function waitForChatGptTarget(port: number, targetUrl: string, timeoutMs: number): Promise<BraveCdpTarget> {
+async function waitForChatGptTarget(
+  port: number,
+  targetUrl: string,
+  timeoutMs: number,
+  onStatus?: BrowserRunStatusEmitter,
+): Promise<BraveCdpTarget> {
   const deadline = Date.now() + timeoutMs
   let lastError = 'No ChatGPT page target found'
+  let openedChatGptTarget = false
 
   while (Date.now() < deadline) {
     try {
-      const targets = (await listBraveCdpTargets(port))
+      const allTargets = await listBraveCdpTargets(port)
+      const targets = allTargets
         .filter((target) => target.type === 'page' && target.webSocketDebuggerUrl)
-      const chatGptTargets = targets.filter((target) => target.url?.includes('chatgpt.com'))
+      const chatGptTargets = targets.filter((target) => isChatGptTargetUrl(target.url))
       for (const target of chatGptTargets) {
         try {
           const state = await withCdpTarget(target, async (socket, idCounter) => {
@@ -359,8 +395,25 @@ async function waitForChatGptTarget(port: number, targetUrl: string, timeoutMs: 
       if (chatGptTargets[0]) {
         return chatGptTargets[0]
       }
-      if (targets.length > 0) {
-        return await openBraveCdpTarget(port, targetUrl)
+
+      lastError = `No ChatGPT page target found; CDP has ${summarizeCdpTargets(allTargets)}`
+      if (!openedChatGptTarget) {
+        openedChatGptTarget = true
+        onStatus?.({
+          phase: 'browser_prepare',
+          message: '未发现 ChatGPT 页面，正在打开',
+          detail: summarizeCdpTargets(allTargets),
+        })
+        const opened = await openBraveCdpTarget(port, targetUrl)
+        if (opened.webSocketDebuggerUrl) {
+          onStatus?.({
+            phase: 'browser_prepare',
+            message: '已创建 ChatGPT 页面目标',
+            detail: opened.url || targetUrl,
+          })
+          return opened
+        }
+        lastError = `Opened ChatGPT target but debugger URL is missing; CDP has ${summarizeCdpTargets([...allTargets, opened])}`
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
@@ -515,6 +568,7 @@ async function submitChatGptPromptWithCdp(args: {
   prompt: string
   targetUrl: string
   timeoutMs: number
+  onStatus?: BrowserRunStatusEmitter
 }): Promise<string | undefined> {
   const deadline = Date.now() + args.timeoutMs
   let lastError = 'No ChatGPT page target found'
@@ -522,7 +576,17 @@ async function submitChatGptPromptWithCdp(args: {
   while (Date.now() < deadline) {
     try {
       const remainingMs = Math.max(1_000, deadline - Date.now())
-      const target = await waitForChatGptTarget(args.port, args.targetUrl, Math.min(remainingMs, 20_000))
+      const target = await waitForChatGptTarget(
+        args.port,
+        args.targetUrl,
+        Math.min(remainingMs, 20_000),
+        args.onStatus,
+      )
+      args.onStatus?.({
+        phase: 'browser_prompt',
+        message: '已连接 ChatGPT 页面',
+        detail: target.url || args.targetUrl,
+      })
       return await withCdpTarget(target, async (socket, idCounter) => {
             await cdpSend(socket, idCounter, 'Page.enable')
             await cdpSend(socket, idCounter, 'Runtime.enable')
@@ -679,7 +743,7 @@ async function captureLatestChatGptImageFromBrave(args: {
   while (Date.now() < deadline) {
     try {
       const targets = (await listBraveCdpTargets(args.port))
-        .filter((target) => target.type === 'page' && target.webSocketDebuggerUrl && target.url?.includes('chatgpt.com'))
+        .filter((target) => target.type === 'page' && target.webSocketDebuggerUrl && isChatGptTargetUrl(target.url))
         .sort((left, right) => {
           const leftPreferred = args.preferredUrl && left.url === args.preferredUrl
           const rightPreferred = args.preferredUrl && right.url === args.preferredUrl
@@ -753,6 +817,12 @@ async function captureLatestChatGptImageFromBrave(args: {
   }
 
   throw new Error(lastError)
+}
+
+export const agentOSBrowserUseRunnerTestables = {
+  isChatGptTargetUrl,
+  summarizeCdpTargets,
+  waitForChatGptTarget,
 }
 
 async function appendBrowserRunLog(record: AgentOSBrowserUseRunResult): Promise<string | undefined> {
@@ -865,6 +935,7 @@ export async function runAgentOSBraveChatGptPrompt(args: {
       prompt: args.prompt,
       targetUrl,
       timeoutMs: args.timeoutMs ?? 30_000,
+      onStatus: args.onStatus,
     })
     args.onStatus?.({
       phase: 'browser_waiting',
