@@ -66,6 +66,10 @@ import type {
   SkillFeedbackVerdict,
   SkillMoment,
   SkillMomentCritique,
+  SkillMomentEvolutionCandidateListInput,
+  SkillMomentEvolutionCandidateListResult,
+  SkillMomentEvolutionCandidateReviewInput,
+  SkillMomentEvolutionCandidateReviewResult,
   SkillMomentFeedbackRecordInput,
   SkillMomentFeedbackRecordResult,
   SkillMomentListInput,
@@ -83,6 +87,14 @@ export type {
   SkillMoment,
   SkillMomentCritique,
   SkillMomentExecutionMode,
+  SkillMomentEvolutionCandidate,
+  SkillMomentEvolutionCandidateListInput,
+  SkillMomentEvolutionCandidateListResult,
+  SkillMomentEvolutionCandidateReviewInput,
+  SkillMomentEvolutionCandidateReviewResult,
+  SkillMomentEvolutionCandidateReviewState,
+  SkillMomentEvolutionCandidateReviewedStatus,
+  SkillMomentEvolutionCandidateStatus,
   SkillMomentFeedbackRecordInput,
   SkillMomentFeedbackRecordResult,
   SkillMomentListInput,
@@ -782,6 +794,8 @@ export interface ElectronAPI {
   runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<SkillMomentRunCycleResult>
   onSkillMomentRunStatus(callback: (event: SkillMomentRunStatusEvent) => void): () => void
   recordSkillMomentFeedback(args: SkillMomentFeedbackRecordInput): Promise<SkillMomentFeedbackRecordResult>
+  listSkillMomentEvolutionCandidates(args: SkillMomentEvolutionCandidateListInput): Promise<SkillMomentEvolutionCandidateListResult>
+  reviewSkillMomentEvolutionCandidate(args: SkillMomentEvolutionCandidateReviewInput): Promise<SkillMomentEvolutionCandidateReviewResult>
 
   // Flow-next task planning
   flowProjectCheckStatus(workspaceRoot: string): Promise<{ status: FlowProjectStatus; error?: string }>

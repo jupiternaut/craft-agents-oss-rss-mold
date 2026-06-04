@@ -380,6 +380,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.skillMoments.RUN_CYCLE,
   RPC_CHANNELS.skillMoments.RUN_STATUS,
   RPC_CHANNELS.skillMoments.RECORD_FEEDBACK,
+  RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES,
+  RPC_CHANNELS.skillMoments.REVIEW_EVOLUTION_CANDIDATE,
 
   // statuses — workspace metadata
   RPC_CHANNELS.statuses.LIST,

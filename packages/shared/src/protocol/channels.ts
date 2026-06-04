@@ -274,6 +274,8 @@ export const RPC_CHANNELS = {
     RUN_CYCLE: 'skill-moments:run-cycle',
     RUN_STATUS: 'skill-moments:run-status',
     RECORD_FEEDBACK: 'skill-moments:record-feedback',
+    LIST_EVOLUTION_CANDIDATES: 'skill-moments:list-evolution-candidates',
+    REVIEW_EVOLUTION_CANDIDATE: 'skill-moments:review-evolution-candidate',
   },
   statuses: {
     LIST: 'statuses:list',

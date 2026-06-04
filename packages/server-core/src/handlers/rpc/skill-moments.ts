@@ -1,5 +1,7 @@
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type {
+  SkillMomentEvolutionCandidateListInput,
+  SkillMomentEvolutionCandidateReviewInput,
   SkillMomentFeedbackRecordInput,
   SkillMomentListInput,
   SkillMomentRunCycleInput,
@@ -10,7 +12,9 @@ import type { RpcServer } from '../../transport'
 import { pushTyped } from '../../transport'
 import type { HandlerDeps } from '../handler-deps'
 import {
+  listSkillMomentEvolutionCandidatesForWorkspace,
   listSkillMomentsForWorkspace,
+  markSkillMomentEvolutionCandidateReviewedForWorkspace,
   recordSkillMomentFeedbackForWorkspace,
   SkillMomentRunJobManager,
 } from '../../skill-moments'
@@ -19,6 +23,8 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.skillMoments.LIST,
   RPC_CHANNELS.skillMoments.RUN_CYCLE,
   RPC_CHANNELS.skillMoments.RECORD_FEEDBACK,
+  RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES,
+  RPC_CHANNELS.skillMoments.REVIEW_EVOLUTION_CANDIDATE,
 ] as const
 
 export function registerSkillMomentsHandlers(server: RpcServer, deps: HandlerDeps): void {
@@ -71,4 +77,28 @@ export function registerSkillMomentsHandlers(server: RpcServer, deps: HandlerDep
 
     return await recordSkillMomentFeedbackForWorkspace(workspace.rootPath, args)
   })
+
+  server.handle(
+    RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES,
+    async (_ctx, args: SkillMomentEvolutionCandidateListInput) => {
+      const workspace = getWorkspaceByNameOrId(args.workspaceId)
+      if (!workspace) {
+        throw new Error(`Workspace not found: ${args.workspaceId}`)
+      }
+
+      return await listSkillMomentEvolutionCandidatesForWorkspace(workspace.rootPath, args)
+    },
+  )
+
+  server.handle(
+    RPC_CHANNELS.skillMoments.REVIEW_EVOLUTION_CANDIDATE,
+    async (_ctx, args: SkillMomentEvolutionCandidateReviewInput) => {
+      const workspace = getWorkspaceByNameOrId(args.workspaceId)
+      if (!workspace) {
+        throw new Error(`Workspace not found: ${args.workspaceId}`)
+      }
+
+      return await markSkillMomentEvolutionCandidateReviewedForWorkspace(workspace.rootPath, args)
+    },
+  )
 }

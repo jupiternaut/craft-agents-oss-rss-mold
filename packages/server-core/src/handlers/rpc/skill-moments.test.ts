@@ -62,12 +62,24 @@ async function createHarness(deps: HandlerDeps) {
   if (!runCycle) {
     throw new Error('RUN_CYCLE handler not registered')
   }
+  const recordFeedback = handlers.get(RPC_CHANNELS.skillMoments.RECORD_FEEDBACK)
+  if (!recordFeedback) {
+    throw new Error('RECORD_FEEDBACK handler not registered')
+  }
+  const listEvolutionCandidates = handlers.get(RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES)
+  if (!listEvolutionCandidates) {
+    throw new Error('LIST_EVOLUTION_CANDIDATES handler not registered')
+  }
+  const reviewEvolutionCandidate = handlers.get(RPC_CHANNELS.skillMoments.REVIEW_EVOLUTION_CANDIDATE)
+  if (!reviewEvolutionCandidate) {
+    throw new Error('REVIEW_EVOLUTION_CANDIDATE handler not registered')
+  }
   const ctx: RequestContext = {
     clientId: 'client-1',
     workspaceId: 'workspace-1',
     webContentsId: 101,
   }
-  return { runCycle, ctx, pushCalls }
+  return { runCycle, recordFeedback, listEvolutionCandidates, reviewEvolutionCandidate, ctx, pushCalls }
 }
 
 describe('registerSkillMomentsHandlers RUN_CYCLE', () => {
@@ -144,6 +156,62 @@ describe('registerSkillMomentsHandlers RUN_CYCLE', () => {
         workspaceId: 'workspace-1',
         roomId: 'debate',
       })).rejects.toThrow('executor is not configured')
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('lists and reviews evolution candidates through RPC handlers', async () => {
+    try {
+      const {
+        ctx,
+        recordFeedback,
+        listEvolutionCandidates,
+        reviewEvolutionCandidate,
+      } = await createHarness(createDeps())
+
+      await recordFeedback(ctx, {
+        workspaceId: 'workspace-1',
+        roomId: 'debate',
+        momentId: 'moment-1',
+        skillId: 'homelander',
+        skillName: '祖国人',
+        handle: '@homelander',
+        verdict: 1,
+        messageBody: '把城市大屏变成公开审判，逼 Butcher 到镜头前。',
+        recordedAt: '2026-06-04T00:00:00.000Z',
+      })
+
+      const pending = await listEvolutionCandidates(ctx, {
+        workspaceId: 'workspace-1',
+        reviewState: 'pending',
+      }) as { candidates: Array<{ candidateId: string; status: string; target: { momentId: string } }> }
+      expect(pending.candidates).toHaveLength(1)
+      expect(pending.candidates[0]!.status).toBe('pending_review')
+      expect(pending.candidates[0]!.target.momentId).toBe('moment-1')
+
+      const reviewResult = await reviewEvolutionCandidate(ctx, {
+        workspaceId: 'workspace-1',
+        candidateId: pending.candidates[0]!.candidateId,
+        status: 'accepted',
+        reviewedAt: '2026-06-04T00:01:00.000Z',
+        reviewedBy: { id: 'reviewer-1', name: 'Reviewer One' },
+      }) as { candidate: { status: string; reviewedBy?: { id?: string } } }
+      expect(reviewResult.candidate.status).toBe('accepted')
+      expect(reviewResult.candidate.reviewedBy?.id).toBe('reviewer-1')
+
+      const pendingAfterReview = await listEvolutionCandidates(ctx, {
+        workspaceId: 'workspace-1',
+        reviewState: 'pending',
+      }) as { candidates: unknown[] }
+      const reviewed = await listEvolutionCandidates(ctx, {
+        workspaceId: 'workspace-1',
+        reviewState: 'reviewed',
+      }) as { candidates: Array<{ status: string }> }
+
+      expect(pendingAfterReview.candidates).toHaveLength(0)
+      expect(reviewed.candidates).toHaveLength(1)
+      expect(reviewed.candidates[0]!.status).toBe('accepted')
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true })
     }

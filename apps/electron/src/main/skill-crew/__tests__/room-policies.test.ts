@@ -123,6 +123,22 @@ describe('skill crew room policies', () => {
     ].join('\n'))).toBe(true)
   })
 
+  it('keeps fallen-god object-specific Homelander posts while rejecting comeback filler', () => {
+    const policy = getSkillCrewRoomPolicy('debate')
+
+    expect(policy.shouldKeepMoment(skill('homelander'), [
+      '@homelander 朋友圈',
+      '热狗摊的纸盘很薄，三美元硬币硌着掌心。',
+      '他们以为手机能逼神低头，可普通身体的疼只是在提醒我先活过今晚。',
+    ].join('\n'))).toBe(true)
+
+    expect(policy.shouldKeepMoment(skill('homelander'), [
+      '@homelander 朋友圈',
+      '我回来了。',
+      '你们需要继续抬头看我，因为我才是唯一正确的答案。',
+    ].join('\n'))).toBe(false)
+  })
+
   it('keeps Vought subordinates as Homelander replies instead of source posts', () => {
     const policy = getSkillCrewRoomPolicy('debate')
 

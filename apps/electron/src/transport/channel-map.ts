@@ -243,6 +243,8 @@ export const CHANNEL_MAP = {
   runSkillMomentCycle: invoke(RPC_CHANNELS.skillMoments.RUN_CYCLE),
   onSkillMomentRunStatus: listener(RPC_CHANNELS.skillMoments.RUN_STATUS),
   recordSkillMomentFeedback: invoke(RPC_CHANNELS.skillMoments.RECORD_FEEDBACK),
+  listSkillMomentEvolutionCandidates: invoke(RPC_CHANNELS.skillMoments.LIST_EVOLUTION_CANDIDATES),
+  reviewSkillMomentEvolutionCandidate: invoke(RPC_CHANNELS.skillMoments.REVIEW_EVOLUTION_CANDIDATE),
 
   // Statuses
   listStatuses: invoke(RPC_CHANNELS.statuses.LIST),

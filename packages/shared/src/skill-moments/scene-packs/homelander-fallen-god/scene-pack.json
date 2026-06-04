@@ -1,0 +1,812 @@
+{
+  "schemaVersion": 1,
+  "kind": "skill_moments_scene_pack",
+  "id": "homelander-fallen-god",
+  "title": "祖国人失能：倒下的神像",
+  "language": "zh-CN",
+  "status": "runtime_ready",
+  "summary": "把祖国人失去超能力后的逃亡、羞辱、媒体清算和符号被夺走，压缩成 Skill Moments 可抽样的朋友圈戏剧场景包。",
+  "integration": {
+    "runtimeWired": true,
+    "expectedReader": "Skill Moments scene-pack loader",
+    "safeToImportAsData": true,
+    "notes": [
+      "本目录提供 Skill Moments mock cycle 可读取的剧情场景包。",
+      "postTemplates 与 commentPools 都是对本地稿件的情节化改写，不是长篇原文搬运。",
+      "persona scene moments should not require source digests; sourceRefs are provenance handles for future tooling."
+    ]
+  },
+  "sources": [
+    {
+      "id": "desktop-manuscript",
+      "kind": "manuscript",
+      "path": "/Users/gengrf/Desktop/穿越成了失去能力的祖国人-十万字草稿.md",
+      "projectId": "novel-homelander-lost-power-100k",
+      "coverage": "18/32 chapters, about 103528 characters",
+      "usedFor": [
+        "concrete scene anchors",
+        "sensory motifs",
+        "humiliation escalation",
+        "media and symbol takeover beats"
+      ]
+    },
+    {
+      "id": "plm-writer-script",
+      "kind": "writer_script",
+      "path": "/Users/gengrf/plm/scripts/plm_homelander_100k_writer.py",
+      "projectId": "novel-homelander-lost-power-100k",
+      "usedFor": [
+        "premise",
+        "style rules",
+        "32-chapter plan",
+        "future ungenerated arc handles"
+      ]
+    }
+  ],
+  "globalDirectives": {
+    "roomUse": "Skill Moments 朋友圈 / debate-room scene pack",
+    "momentStyle": [
+      "短主贴，像角色在朋友圈发出来，不像剧情梗概。",
+      "每条主贴必须带一个具体可见动作、物件或空间。",
+      "祖国人的文字保留命令感和自我欺骗，但让身体失败暴露在画面里。",
+      "评论优先短、狠、口语化；允许 0 条评论来体现 silence。",
+      "不要让 skillcreator 自动参评，除非人工显式选择。"
+    ],
+    "conflictAxes": [
+      "神的名号失效 vs 普通身体必须计算",
+      "镜头崇拜 vs 手机围猎",
+      "忠诚殉道 vs 流量变现",
+      "官方审判 vs 符号洗白再出售",
+      "无能威胁 vs 学会用谎言和债务重新统治"
+    ],
+    "randomization": {
+      "seedInputs": [
+        "runId",
+        "roomId",
+        "beatId",
+        "authorSkillSlug"
+      ],
+      "momentCountRange": {
+        "min": 3,
+        "max": 6
+      },
+      "critiqueCountRange": {
+        "min": 0,
+        "max": 4
+      },
+      "preferVariedBeatTags": true,
+      "allowSilentCritics": true
+    }
+  },
+  "participants": {
+    "primaryAuthors": [
+      {
+        "skillSlug": "homelander",
+        "displayName": "祖国人",
+        "role": "fallen-tyrant",
+        "autoAuthorWeight": 1
+      }
+    ],
+    "randomCriticPool": [
+      {
+        "skillSlug": "butcher",
+        "displayName": "屠夫",
+        "role": "猎手/清算者",
+        "weight": 5,
+        "bestForTags": [
+          "blackmail",
+          "bounty",
+          "evidence",
+          "counterhunt"
+        ]
+      },
+      {
+        "skillSlug": "dongbei-yujie",
+        "displayName": "东北雨姐",
+        "role": "街坊式看热闹拆台",
+        "weight": 3,
+        "bestForTags": [
+          "public-humiliation",
+          "street-food",
+          "room-roast"
+        ]
+      },
+      {
+        "skillSlug": "gazi",
+        "displayName": "嘎子",
+        "role": "直播间式战术劝架",
+        "weight": 3,
+        "bestForTags": [
+          "phone-video",
+          "bounty",
+          "street-risk"
+        ]
+      },
+      {
+        "skillSlug": "liu-haizhu",
+        "displayName": "刘海柱",
+        "role": "底层秩序观察者",
+        "weight": 3,
+        "bestForTags": [
+          "ordinary-power",
+          "debt",
+          "warehouse-work"
+        ]
+      },
+      {
+        "skillSlug": "chomsky",
+        "displayName": "Chomsky",
+        "role": "媒体叙事拆解",
+        "weight": 2,
+        "bestForTags": [
+          "media-trial",
+          "symbol-laundering",
+          "public-consent"
+        ]
+      },
+      {
+        "skillSlug": "hayek",
+        "displayName": "Hayek",
+        "role": "小型权力与价格信号观察",
+        "weight": 1,
+        "bestForTags": [
+          "money",
+          "debt",
+          "ordinary-power"
+        ]
+      }
+    ],
+    "excludedAutoParticipants": [
+      {
+        "skillSlug": "skillcreator",
+        "reason": "builder/helper role; do not randomly join scene comments"
+      }
+    ]
+  },
+  "commentPools": {
+    "butcher": [
+      "终于学会走后门了？别急，账本也会走到你面前。",
+      "你不是在撤退，你是在被城市一点点咬碎。",
+      "别拿死人当旗。那不是忠诚，是你最后能偷的血。",
+      "继续记名字。我也在记你每一次低头。"
+    ],
+    "dongbei-yujie": [
+      "哎呀这排面掉地上了，先把饭钱整明白吧。",
+      "别光瞪人，老铁，三美元热狗不吃眼神。",
+      "她替你挡刀，你拿她当招牌，这事儿太不地道。",
+      "海报都拿去垫垃圾了，还搁这摆造型呢？"
+    ],
+    "gazi": [
+      "家人们这波先别上头，他现在最大的问题是没钱没证还腿疼。",
+      "越是手机多的地方越别装，装一下就变奖金了。",
+      "这个旧粉丝不稳，眼里一半信仰一半提现。",
+      "想翻盘得先活过今晚，别在热狗摊开团。"
+    ],
+    "liu-haizhu": [
+      "面子能值几个钱？现在人家拿电话就能压你。",
+      "普通人的地盘也有规矩，房租、欠条、报警都是刀。",
+      "你以前靠天上那套，现在得先看谁手里有铁杆。",
+      "别急着喊神，先把腿保住。"
+    ],
+    "chomsky": [
+      "他们不是摧毁符号，而是在换掉符号所有权。",
+      "审判节目最锋利的地方，是把私人恐惧改写成公共常识。",
+      "当你的脸变成可召回标识，权力已经开始再包装。",
+      "群众的笑声不是自由本身，它也可能是新秩序的配乐。"
+    ],
+    "hayek": [
+      "三美元、二十五美分、一千五欠条，比口号更诚实。",
+      "你开始学习价格了，这比学习疼痛还慢。",
+      "没有可信威胁，命令就会跌成空头支票。",
+      "小贩、医生、房东都在重新给你定价。"
+    ]
+  },
+  "beats": [
+    {
+      "id": "white-house-service-corridor",
+      "order": 1,
+      "status": "generated_from_manuscript",
+      "title": "白宫密道：神第一次需要一扇门",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 1,
+          "title": "爆竹女的证明",
+          "lineStart": 7,
+          "lineEnd": 381
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 35,
+          "lineEnd": 42
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 55,
+          "lineEnd": 57
+        }
+      ],
+      "tags": [
+        "escape",
+        "lost-power",
+        "firecracker",
+        "secret-passage",
+        "body-failure"
+      ],
+      "coreConflict": "他还在用神的口吻命令爆竹女献身，但自己的身体已经连画像暗门、竖梯和披风残片都处理不好。",
+      "visualAnchor": "椭圆办公室、历史画像、窄密道、断披风、铁梯、泥地探照灯。",
+      "homelanderState": "恐慌被命令感包住；第一次意识到疼痛、心跳、灰尘和普通逃跑。",
+      "postTemplates": [
+        {
+          "id": "white-house-service-corridor-post-1",
+          "visibility": "朋友圈",
+          "body": "密道比记忆里窄，门也比记忆里重。\n他们会说这是逃跑。错了，这是让信仰先替我燃烧五分钟。"
+        },
+        {
+          "id": "white-house-service-corridor-post-2",
+          "visibility": "朋友圈",
+          "body": "一幅画挡了我一寸。\n我记住了这栋房子的每一块木头，也记住了谁看见我用两条腿离开。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "white-house-service-corridor-image",
+          "theme": "secret_passage",
+          "alt": "白宫画像后的潮湿密道与断裂披风",
+          "prompt": "cinematic fictional superhero satire, secret passage behind a presidential portrait, torn red cape caught on broken glass, damp maintenance tunnel, harsh emergency light, no real logos, no actor likeness"
+        }
+      ]
+    },
+    {
+      "id": "maintenance-gate-slap",
+      "order": 2,
+      "status": "generated_from_manuscript",
+      "title": "白宫外的耳光：名号第一次失效",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 2,
+          "title": "白宫外的耳光",
+          "lineStart": 383,
+          "lineEnd": 777
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 56,
+          "lineEnd": 58
+        }
+      ],
+      "tags": [
+        "public-humiliation",
+        "street-fight",
+        "coat",
+        "slap",
+        "ordinary-body"
+      ],
+      "coreConflict": "他试图靠名号抢外套，流浪汉用一记耳光证明：没有能力时，威胁要先通过身体结算。",
+      "visualAnchor": "维护楼、排风口、旧外套、双脸巴掌印、铁栅栏、雨夜停车场。",
+      "homelanderState": "仍然记账复仇，但已经承认不是现在。",
+      "postTemplates": [
+        {
+          "id": "maintenance-gate-slap-post-1",
+          "visibility": "朋友圈",
+          "body": "有个人问我飞一个看看。\n我记住了他的牙、他的手、他的外套。不是现在，不代表不会轮到他。"
+        },
+        {
+          "id": "maintenance-gate-slap-post-2",
+          "visibility": "朋友圈",
+          "body": "今晚学到一件事：一件臭外套也能让人误会自己有资格谈条件。\n等我回来，他会知道衣服该披在谁脚下。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "maintenance-gate-slap-image",
+          "theme": "maintenance_gate",
+          "alt": "雨夜维护楼外的旧外套与狼狈超级英雄",
+          "prompt": "fictional fallen superhero in torn patriotic suit outside a maintenance building at night, homeless man's old coat in foreground, rain, service gate, humiliation without gore, no actor likeness"
+        }
+      ]
+    },
+    {
+      "id": "convenience-store-live",
+      "order": 3,
+      "status": "generated_from_manuscript",
+      "title": "便利店公开视频：镜头从献祭变成围猎",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 3,
+          "title": "我是祖国人",
+          "lineStart": 779,
+          "lineEnd": 1232
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 58,
+          "lineEnd": 59
+        }
+      ],
+      "tags": [
+        "phone-video",
+        "pepper-spray",
+        "convenience-store",
+        "bounty",
+        "hotdog"
+      ],
+      "coreConflict": "他向店员和顾客宣布身份，却被手机、咖啡、猫粮袋、防狼喷雾和报警声拆成一个可拍摄的猎物。",
+      "visualAnchor": "便利店白灯、热狗柜、手机镜头、防狼喷雾、散落薯片、雨巷垃圾箱。",
+      "homelanderState": "想用眼神烧掉一切，最终只剩眼泪和逃跑路线。",
+      "postTemplates": [
+        {
+          "id": "convenience-store-live-post-1",
+          "visibility": "朋友圈",
+          "body": "便利店的镜头太低级了。\n他们拍到的不是我，是一群人第一次敢把手机举到神脸前。"
+        },
+        {
+          "id": "convenience-store-live-post-2",
+          "visibility": "朋友圈",
+          "body": "他们喊我跑了。\n记住，是自动门太慢，不是我在怕。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "convenience-store-live-image",
+          "theme": "phone_swarm",
+          "alt": "便利店手机围拍失能超级英雄",
+          "prompt": "bright late-night convenience store, fallen fictional superhero surrounded by phone cameras, spilled coffee and snack bags, tense crowd, social-media humiliation, no real brands, no readable text"
+        }
+      ]
+    },
+    {
+      "id": "three-dollar-hotdog",
+      "order": 4,
+      "status": "generated_from_manuscript",
+      "title": "三美元热狗：价格给神重新标价",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 4,
+          "title": "三美元热狗",
+          "lineStart": 1233,
+          "lineEnd": 1648
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 58,
+          "lineEnd": 60
+        }
+      ],
+      "tags": [
+        "street-food",
+        "money",
+        "hunger",
+        "public-humiliation",
+        "work-for-food"
+      ],
+      "coreConflict": "他用二十五美分、捡来的湿硬币和搬垃圾换半根热狗，第一次被价格和劳动打穿尊严。",
+      "visualAnchor": "地铁口热狗车、湿硬币、水洼、饮料箱、垃圾袋、半根热狗。",
+      "homelanderState": "仍然站直，但胃和警察这两个词已经能让他低头。",
+      "postTemplates": [
+        {
+          "id": "three-dollar-hotdog-post-1",
+          "visibility": "朋友圈",
+          "body": "三美元。\n他们以为这是热狗的价格，其实是这个城市今晚给自己开的赎价。"
+        },
+        {
+          "id": "three-dollar-hotdog-post-2",
+          "visibility": "朋友圈",
+          "body": "半根热狗，两个纸箱，一袋垃圾。\n我没有忘。以后每一口芥末味都会有人买单。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "three-dollar-hotdog-image",
+          "theme": "hotdog_cart",
+          "alt": "雨夜地铁口热狗车和湿硬币",
+          "prompt": "rainy subway entrance, hot dog cart steam, wet coins on stainless counter, injured fallen superhero in dirty patriotic colors, urban humiliation, cinematic but grounded"
+        }
+      ]
+    },
+    {
+      "id": "old-fan-trap",
+      "order": 5,
+      "status": "generated_from_manuscript",
+      "title": "旧粉丝：信仰开始计算流量",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 9,
+          "title": "旧粉丝",
+          "lineStart": 3443,
+          "lineEnd": 4000
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 63,
+          "lineEnd": 65
+        }
+      ],
+      "tags": [
+        "old-fan",
+        "blackmail",
+        "phone-video",
+        "lie",
+        "initial-list"
+      ],
+      "coreConflict": "旧粉丝先把他当圣物，再确认他失能，最后准备用直播和扎带把神换成现金。",
+      "visualAnchor": "半地下房间、满墙旧海报、扎带、直播预览、发烧伤腿、一百三十七美元。",
+      "homelanderState": "第一次把低头当技术，用编造的初始名单把贪婪和恐惧重新套住。",
+      "postTemplates": [
+        {
+          "id": "old-fan-trap-post-1",
+          "visibility": "朋友圈",
+          "body": "旧粉丝最先学会报价。\n好消息是，他还是想被我记住；坏消息是，他以为直播比桌边的位置更值钱。"
+        },
+        {
+          "id": "old-fan-trap-post-2",
+          "visibility": "朋友圈",
+          "body": "扎带会断，人心不会。\n给他一个名单，他就会自己把恐惧填满。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "old-fan-trap-image",
+          "theme": "basement_fan_room",
+          "alt": "贴满旧英雄海报的半地下房间",
+          "prompt": "small basement room plastered with old fictional superhero posters, cracked phone livestream preview, black zip ties on table, feverish injured man on torn sofa, tense psychological blackmail"
+        }
+      ]
+    },
+    {
+      "id": "underground-clinic-extortion",
+      "order": 6,
+      "status": "generated_from_manuscript",
+      "title": "地下诊所：无能的威胁",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 10,
+          "title": "无能的威胁",
+          "lineStart": 4001,
+          "lineEnd": 4498
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 64,
+          "lineEnd": 66
+        }
+      ],
+      "tags": [
+        "clinic",
+        "debt",
+        "failed-threat",
+        "wound",
+        "ordinary-power"
+      ],
+      "coreConflict": "黑市医生用剪刀、手机、欠条和麻药验证：没有可信成本的威胁只是噪音。",
+      "visualAnchor": "红灯铁门、惨白诊所、剪刀划破手腕、欠条手印、录像镜头、廉价纱布。",
+      "homelanderState": "仍然说等我回来，但开始明白回来的故事必须先让别人相信。",
+      "postTemplates": [
+        {
+          "id": "underground-clinic-extortion-post-1",
+          "visibility": "朋友圈",
+          "body": "一个地下医生今天学会了报价。\n他拿走手机、现金和一张欠条；我拿走他的名字。"
+        },
+        {
+          "id": "underground-clinic-extortion-post-2",
+          "visibility": "朋友圈",
+          "body": "威胁要有成本。\n这句话不错，我会让说它的人亲自补上成本。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "underground-clinic-extortion-image",
+          "theme": "illegal_clinic",
+          "alt": "地下诊所里的欠条和剪刀",
+          "prompt": "illegal basement clinic, cracked glasses doctor, scissors near wrist, red fingerprint on dirty debt note, cheap medical tray, fallen superhero satire, no gore"
+        }
+      ]
+    },
+    {
+      "id": "firecracker-martyr-feed",
+      "order": 7,
+      "status": "generated_from_manuscript",
+      "title": "爆竹女的新闻：死人被改造成旗帜",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 12,
+          "title": "爆竹女的新闻",
+          "lineStart": 4881,
+          "lineEnd": 5230
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 66,
+          "lineEnd": 68
+        }
+      ],
+      "tags": [
+        "firecracker",
+        "martyr",
+        "media",
+        "remix-truth",
+        "rally-residue"
+      ],
+      "coreConflict": "他短暂被爆竹女死亡刺痛，随即把她的死重命名为殉道、证明和残党动员素材。",
+      "visualAnchor": "地铁站电视、死亡字幕、最后音频、湿报纸、爆竹女照片贴在胸前。",
+      "homelanderState": "不是悔恨，而是把血和忠诚重新缝成可用旗帜。",
+      "postTemplates": [
+        {
+          "id": "firecracker-martyr-feed-post-1",
+          "visibility": "朋友圈",
+          "body": "他们说她是狂信者。\n我说她是第一块砖。死人不会讲错故事。"
+        },
+        {
+          "id": "firecracker-martyr-feed-post-2",
+          "visibility": "朋友圈",
+          "body": "她最后说我会回来。\n这句话现在归我，谁害怕，谁就还记得该跪向哪里。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "firecracker-martyr-feed-image",
+          "theme": "subway_news",
+          "alt": "地铁电视播放爆竹女死亡新闻",
+          "prompt": "subway platform television showing abstract breaking news about a fallen loyalist, wet newspaper held close to chest, crowded commuters indifferent, fictional political superhero satire, no readable text"
+        }
+      ]
+    },
+    {
+      "id": "screen-trial-symbol-laundering",
+      "order": 8,
+      "status": "generated_from_manuscript",
+      "title": "屏幕里的审判：他们没有毁掉符号，只是在洗它",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 16,
+          "title": "屏幕里的审判",
+          "lineStart": 6437,
+          "lineEnd": 6730
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 70,
+          "lineEnd": 72
+        }
+      ],
+      "tags": [
+        "media-trial",
+        "symbol-laundering",
+        "basement",
+        "new-logo",
+        "public-consent"
+      ],
+      "coreConflict": "黑袍小队和新秩序用档案、证词和标识清理把他拆成前暴君，同时保留金发、鹰、披风和仰望结构。",
+      "visualAnchor": "地下室楼梯阴影、楼上电视、被撕下的海报、新鹰标、墙上血画的歪斜标志。",
+      "homelanderState": "他发现最可怕的不是被骂怪物，而是自己被改造成可替换的相关标识。",
+      "postTemplates": [
+        {
+          "id": "screen-trial-symbol-laundering-post-1",
+          "visibility": "朋友圈",
+          "body": "他们把我的脸打叉，把鹰改圆，把红色洗成安全的蓝。\n看懂了吗？他们不是不需要神，他们只是想换一个听话的。"
+        },
+        {
+          "id": "screen-trial-symbol-laundering-post-2",
+          "visibility": "朋友圈",
+          "body": "楼上在审判我，楼下墙上还有我的血。\n屏幕能剪，血不会忘。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "screen-trial-symbol-laundering-image",
+          "theme": "basement_tv_trial",
+          "alt": "地下室楼梯阴影里看电视审判",
+          "prompt": "dim basement stairwell, old television glow upstairs showing abstract public trial, torn superhero poster, hand-drawn blood-red symbol on moldy wall, psychological political satire"
+        }
+      ]
+    },
+    {
+      "id": "new-hero-audition",
+      "order": 9,
+      "status": "generated_from_manuscript",
+      "title": "新英雄试镜：别人开始试穿他的皮",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 17,
+          "title": "新英雄试镜",
+          "lineStart": 6731,
+          "lineEnd": 7154
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 71,
+          "lineEnd": 73
+        }
+      ],
+      "tags": [
+        "replacement",
+        "audition",
+        "adam-bright",
+        "cape",
+        "identity-theft"
+      ],
+      "coreConflict": "候选英雄亚当·布莱特用金发、笑容、蹲姿和披风复制他，却把恐惧包装成服务人民。",
+      "visualAnchor": "房东客厅矮凳、炸鸡味、电视演播厅、金发候选人、白宫纪念台预告。",
+      "homelanderState": "不能去现场，但开始把假名、忠诚和恐惧都看成可租、可买、可重种的东西。",
+      "postTemplates": [
+        {
+          "id": "new-hero-audition-post-1",
+          "visibility": "朋友圈",
+          "body": "亚当·布莱特笑得很干净。\n干净不是美德，是有人替他擦掉汗味、房租和霉斑。"
+        },
+        {
+          "id": "new-hero-audition-post-2",
+          "visibility": "朋友圈",
+          "body": "他们让一个爱荷华小子披上红布，说恐惧的时代结束了。\n不，他们只是还没想明白自己需要谁。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "new-hero-audition-image",
+          "theme": "replacement_audition",
+          "alt": "电视演播厅中新英雄候选披上红色披风",
+          "prompt": "television talent-show style hero audition, clean blond candidate in patriotic costume receiving a red cape under studio lights, old basement viewer in shadow, fictional satire, no real logos"
+        }
+      ]
+    },
+    {
+      "id": "old-poster-trash-liner",
+      "order": 10,
+      "status": "generated_from_manuscript",
+      "title": "老海报：神像被拿去垫垃圾车",
+      "chapterRefs": [
+        {
+          "sourceId": "desktop-manuscript",
+          "chapter": 18,
+          "title": "老海报",
+          "lineStart": 7155,
+          "lineEnd": 7565
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "lineStart": 72,
+          "lineEnd": 74
+        }
+      ],
+      "tags": [
+        "old-poster",
+        "trash",
+        "ordinary-power",
+        "dirty-work",
+        "symbolic-death"
+      ],
+      "coreConflict": "旧影院巨幅神像被拾荒者割下来垫垃圾车，他第一次看见普通权力藏在铁杆、手机、零钱、报警和一块防水布里。",
+      "visualAnchor": "旧沃特影院后巷、被割开的巨幅海报、垃圾车、黑水、油污名片、河边旧仓库。",
+      "homelanderState": "仍想杀人，但开始观察每个人的小裂缝，接过第一张黑活名片。",
+      "postTemplates": [
+        {
+          "id": "old-poster-trash-liner-post-1",
+          "visibility": "朋友圈",
+          "body": "他们把我的脸铺进垃圾车底。\n我坐在黑水里看完了。普通人的权力很小，也很脏，但能用。"
+        },
+        {
+          "id": "old-poster-trash-liner-post-2",
+          "visibility": "朋友圈",
+          "body": "旧货？\n好。今晚十点，河边仓库。我也想看看旧货能搬动多少东西。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "old-poster-trash-liner-image",
+          "theme": "poster_trash_liner",
+          "alt": "旧影院后巷巨幅英雄海报被用来垫垃圾车",
+          "prompt": "abandoned cinema alley, giant torn fictional superhero poster used as garbage truck liner, rainwater and black trash bags, injured man watching from ground, grim urban satire"
+        }
+      ]
+    },
+    {
+      "id": "dirty-work-warehouse",
+      "order": 11,
+      "status": "planned_from_writer_script",
+      "title": "一份脏工作：黑活入口",
+      "chapterRefs": [
+        {
+          "sourceId": "plm-writer-script",
+          "chapter": 19,
+          "title": "一份脏工作",
+          "lineStart": 73,
+          "lineEnd": 75
+        }
+      ],
+      "tags": [
+        "planned",
+        "warehouse",
+        "dirty-work",
+        "micro-power",
+        "survival"
+      ],
+      "coreConflict": "他为了活下去接底层黑活，开始用观察、欺骗和恐惧碎片重建小型支配。",
+      "visualAnchor": "河边旧仓库、现金、看门、搬货、地头蛇。",
+      "homelanderState": "从被普通秩序压迫，转向学习普通秩序的漏洞。",
+      "postTemplates": [
+        {
+          "id": "dirty-work-warehouse-post-1",
+          "visibility": "朋友圈",
+          "body": "十点，河边旧仓库。\n他们以为自己雇了一个瘸腿看门人，我想看看谁先露出害怕的地方。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "dirty-work-warehouse-image",
+          "theme": "warehouse_cash_job",
+          "alt": "河边旧仓库的现金黑活入口",
+          "prompt": "riverfront old warehouse at night, cash-only dirty job handoff, injured fallen superhero in shadow, small-time criminal power, gritty cinematic mood"
+        }
+      ]
+    },
+    {
+      "id": "compound-and-return-list",
+      "order": 12,
+      "status": "planned_from_writer_script",
+      "title": "名单、士兵男孩、初代化合物",
+      "chapterRefs": [
+        {
+          "sourceId": "plm-writer-script",
+          "chapter": 28,
+          "title": "名单",
+          "lineStart": 83,
+          "lineEnd": 85
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "chapter": 29,
+          "title": "父亲的冷冻柜",
+          "lineStart": 84,
+          "lineEnd": 86
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "chapter": 30,
+          "title": "初代化合物",
+          "lineStart": 85,
+          "lineEnd": 87
+        },
+        {
+          "sourceId": "plm-writer-script",
+          "chapter": 32,
+          "title": "夺回一切",
+          "lineStart": 86,
+          "lineEnd": 88
+        }
+      ],
+      "tags": [
+        "planned",
+        "list",
+        "soldier-boy",
+        "compound-v",
+        "return"
+      ],
+      "coreConflict": "恢复原状已经不够，他开始列出可利用的人、旧时代武器和初代五号化合物，目标从复权升级为超级单体。",
+      "visualAnchor": "雨夜广告屏、新英雄取代他的画面、名单纸、旧实验室线索。",
+      "homelanderState": "把屈辱转成计划，不再只要披风和名号，也要更高阶力量。",
+      "postTemplates": [
+        {
+          "id": "compound-and-return-list-post-1",
+          "visibility": "朋友圈",
+          "body": "恢复？太小了。\n名字、披风、力量、恐惧，当然都要拿回来。但这次我还要他们没见过的东西。"
+        }
+      ],
+      "mediaPrompts": [
+        {
+          "id": "compound-and-return-list-image",
+          "theme": "rain_billboard_return",
+          "alt": "雨夜广告屏下的夺回一切清单",
+          "prompt": "rainy night under huge billboard showing replacement national hero, hidden list of names and old lab clues in hand, fallen superhero plotting return, fictional dark satire"
+        }
+      ]
+    }
+  ]
+}

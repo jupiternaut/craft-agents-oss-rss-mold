@@ -146,4 +146,87 @@ export type SkillMomentFeedbackRecordInput = {
 export type SkillMomentFeedbackRecordResult = {
   success: boolean
   path: string
+  evolutionCandidatePath?: string
+}
+
+export type SkillMomentEvolutionCandidateStatus = 'pending_review' | 'accepted' | 'rejected'
+
+export type SkillMomentEvolutionCandidateReviewedStatus = 'accepted' | 'rejected'
+
+export type SkillMomentEvolutionCandidateReviewState = 'pending' | 'reviewed'
+
+export type SkillMomentEvolutionCandidate = {
+  schemaVersion: 1
+  source: 'debt.skill-moments.feedback'
+  status: SkillMomentEvolutionCandidateStatus
+  candidateId: string
+  createdAt: string
+  reviewedAt?: string
+  reviewedBy?: {
+    id?: string
+    name?: string
+  }
+  reviewNote?: string
+  roomId: string
+  skill: {
+    id: string
+    name?: string
+    handle?: string
+  }
+  target: {
+    kind: 'moment' | 'critique'
+    roomId: string
+    momentId: string
+    critiqueId?: string
+  }
+  proposedInstructionDelta: {
+    kind: 'reinforce' | 'guardrail'
+    summary: string
+    instructionHint: string
+  }
+  positiveEvidence: Array<{
+    verdict: 1
+    recordedAt: string
+    response: string
+    sourceLinks: string[]
+  }>
+  regressionEvidence: Array<{
+    verdict: 3
+    recordedAt: string
+    response: string
+    sourceLinks: string[]
+  }>
+  neutralEvidenceCount: number
+  doesNotAutoApply: true
+}
+
+export type SkillMomentEvolutionCandidateListInput = {
+  workspaceId: string
+  reviewState?: SkillMomentEvolutionCandidateReviewState
+  status?: SkillMomentEvolutionCandidateStatus
+  roomId?: string
+  skillId?: string
+  limit?: number
+}
+
+export type SkillMomentEvolutionCandidateListResult = {
+  candidates: SkillMomentEvolutionCandidate[]
+}
+
+export type SkillMomentEvolutionCandidateReviewInput = {
+  workspaceId: string
+  candidateId: string
+  status: SkillMomentEvolutionCandidateReviewedStatus
+  reviewedAt?: string
+  reviewedBy?: {
+    id?: string
+    name?: string
+  }
+  reviewNote?: string
+}
+
+export type SkillMomentEvolutionCandidateReviewResult = {
+  success: boolean
+  path: string
+  candidate: SkillMomentEvolutionCandidate
 }
