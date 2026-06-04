@@ -12,6 +12,7 @@
  * - ~/.craft-agent/workspaces/{slug}/ - Workspace directory (recursive)
  *   - sources/{slug}/config.json, guide.md, permissions.json
  *   - skills/{slug}/SKILL.md, icon.*
+ *   - skills/{room}/{slug}/SKILL.md, icon.*
  *   - sessions/{id}/session.jsonl (header metadata only)
  *   - permissions.json
  */
@@ -450,10 +451,10 @@ export class ConfigWatcher {
       return;
     }
 
-    // Skills changes: skills/{slug}/...
+    // Skills changes: skills/{slug}/... or skills/{room}/{slug}/...
     if (parts[0] === 'skills' && parts.length >= 2) {
-      const slug = parts[1]!;  // Safe: checked parts.length >= 2
-      const file = parts[2];
+      const file = parts[parts.length - 1];
+      const slug = parts.length >= 3 ? parts[parts.length - 2]! : parts[1]!;  // Safe: checked parts.length >= 2
 
       // Directory-level changes (new/removed skill folders)
       if (parts.length === 2) {
@@ -793,6 +794,7 @@ export class ConfigWatcher {
   private handleSkillChange(slug: string): void {
     debug('[ConfigWatcher] Skill changed:', slug);
 
+    invalidateSkillsCache();
     const skill = loadSkill(this.workspaceDir, slug);
     this.callbacks.onSkillChange?.(slug, skill);
 
@@ -806,6 +808,7 @@ export class ConfigWatcher {
         .then((iconPath) => {
           if (iconPath) {
             // Reload the skill with the new icon and emit another change
+            invalidateSkillsCache();
             const updatedSkill = loadSkill(this.workspaceDir, slug);
             debug('[ConfigWatcher] Icon downloaded, emitting updated skill:', slug);
             this.callbacks.onSkillChange?.(slug, updatedSkill);

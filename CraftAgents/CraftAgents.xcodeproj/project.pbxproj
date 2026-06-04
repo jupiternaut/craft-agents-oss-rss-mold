@@ -1,0 +1,436 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		CA0000000000000000000101 /* CraftAgentsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000201 /* CraftAgentsApp.swift */; };
+		CA0000000000000000000102 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000202 /* MainTabView.swift */; };
+		CA0000000000000000000103 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000203 /* RootView.swift */; };
+		CA0000000000000000000104 /* Automation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000204 /* Automation.swift */; };
+		CA0000000000000000000105 /* LLMConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000205 /* LLMConnection.swift */; };
+		CA0000000000000000000106 /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000206 /* Message.swift */; };
+		CA0000000000000000000107 /* ServerStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000207 /* ServerStatus.swift */; };
+		CA0000000000000000000108 /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000208 /* Session.swift */; };
+		CA0000000000000000000109 /* Skill.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000209 /* Skill.swift */; };
+		CA0000000000000000000110 /* Source.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000210 /* Source.swift */; };
+		CA0000000000000000000111 /* TokenUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000211 /* TokenUsage.swift */; };
+		CA0000000000000000000112 /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000212 /* Workspace.swift */; };
+		CA0000000000000000000113 /* AnyCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000213 /* AnyCodable.swift */; };
+		CA0000000000000000000114 /* MessageEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000214 /* MessageEnvelope.swift */; };
+		CA0000000000000000000115 /* RPCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000215 /* RPCClient.swift */; };
+		CA0000000000000000000116 /* ServerEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000216 /* ServerEvent.swift */; };
+		CA0000000000000000000117 /* WebSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000217 /* WebSocketTransport.swift */; };
+		CA0000000000000000000118 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000218 /* AppViewModel.swift */; };
+		CA0000000000000000000119 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000219 /* ChatViewModel.swift */; };
+		CA0000000000000000000120 /* SessionsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000220 /* SessionsViewModel.swift */; };
+		CA0000000000000000000121 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000221 /* SettingsViewModel.swift */; };
+		CA0000000000000000000122 /* SkillsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000222 /* SkillsViewModel.swift */; };
+		CA0000000000000000000123 /* SourcesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000223 /* SourcesViewModel.swift */; };
+		CA0000000000000000000124 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000224 /* ChatView.swift */; };
+		CA0000000000000000000125 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000225 /* ConnectView.swift */; };
+		CA0000000000000000000126 /* SessionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000226 /* SessionsListView.swift */; };
+		CA0000000000000000000127 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000227 /* SettingsView.swift */; };
+		CA0000000000000000000128 /* SkillsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000228 /* SkillsListView.swift */; };
+		CA0000000000000000000129 /* SourcesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA0000000000000000000229 /* SourcesListView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		CA0000000000000000000201 /* CraftAgentsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/App/CraftAgentsApp.swift; sourceTree = "<group>"; };
+		CA0000000000000000000202 /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/App/MainTabView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000203 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/App/RootView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000204 /* Automation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/Automation.swift; sourceTree = "<group>"; };
+		CA0000000000000000000205 /* LLMConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/LLMConnection.swift; sourceTree = "<group>"; };
+		CA0000000000000000000206 /* Message.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/Message.swift; sourceTree = "<group>"; };
+		CA0000000000000000000207 /* ServerStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/ServerStatus.swift; sourceTree = "<group>"; };
+		CA0000000000000000000208 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/Session.swift; sourceTree = "<group>"; };
+		CA0000000000000000000209 /* Skill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/Skill.swift; sourceTree = "<group>"; };
+		CA0000000000000000000210 /* Source.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/Source.swift; sourceTree = "<group>"; };
+		CA0000000000000000000211 /* TokenUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/TokenUsage.swift; sourceTree = "<group>"; };
+		CA0000000000000000000212 /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Models/Workspace.swift; sourceTree = "<group>"; };
+		CA0000000000000000000213 /* AnyCodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Networking/AnyCodable.swift; sourceTree = "<group>"; };
+		CA0000000000000000000214 /* MessageEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Networking/MessageEnvelope.swift; sourceTree = "<group>"; };
+		CA0000000000000000000215 /* RPCClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Networking/RPCClient.swift; sourceTree = "<group>"; };
+		CA0000000000000000000216 /* ServerEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Networking/ServerEvent.swift; sourceTree = "<group>"; };
+		CA0000000000000000000217 /* WebSocketTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Networking/WebSocketTransport.swift; sourceTree = "<group>"; };
+		CA0000000000000000000218 /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ViewModels/AppViewModel.swift; sourceTree = "<group>"; };
+		CA0000000000000000000219 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ViewModels/ChatViewModel.swift; sourceTree = "<group>"; };
+		CA0000000000000000000220 /* SessionsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ViewModels/SessionsViewModel.swift; sourceTree = "<group>"; };
+		CA0000000000000000000221 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ViewModels/SettingsViewModel.swift; sourceTree = "<group>"; };
+		CA0000000000000000000222 /* SkillsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ViewModels/SkillsViewModel.swift; sourceTree = "<group>"; };
+		CA0000000000000000000223 /* SourcesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ViewModels/SourcesViewModel.swift; sourceTree = "<group>"; };
+		CA0000000000000000000224 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/Chat/ChatView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000225 /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/Components/ConnectView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000226 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/Sessions/SessionsListView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000227 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/Settings/SettingsView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000228 /* SkillsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/Skills/SkillsListView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000229 /* SourcesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/Sources/SourcesListView.swift; sourceTree = "<group>"; };
+		CA0000000000000000000230 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		CA0000000000000000000301 /* CraftAgents.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CraftAgents.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		CA0000000000000000000401 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		CA0000000000000000000501 = {
+			isa = PBXGroup;
+			children = (
+				CA0000000000000000000502 /* Sources */,
+				CA0000000000000000000230 /* Info.plist */,
+				CA0000000000000000000503 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CA0000000000000000000502 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				CA0000000000000000000201 /* CraftAgentsApp.swift */,
+				CA0000000000000000000202 /* MainTabView.swift */,
+				CA0000000000000000000203 /* RootView.swift */,
+				CA0000000000000000000204 /* Automation.swift */,
+				CA0000000000000000000205 /* LLMConnection.swift */,
+				CA0000000000000000000206 /* Message.swift */,
+				CA0000000000000000000207 /* ServerStatus.swift */,
+				CA0000000000000000000208 /* Session.swift */,
+				CA0000000000000000000209 /* Skill.swift */,
+				CA0000000000000000000210 /* Source.swift */,
+				CA0000000000000000000211 /* TokenUsage.swift */,
+				CA0000000000000000000212 /* Workspace.swift */,
+				CA0000000000000000000213 /* AnyCodable.swift */,
+				CA0000000000000000000214 /* MessageEnvelope.swift */,
+				CA0000000000000000000215 /* RPCClient.swift */,
+				CA0000000000000000000216 /* ServerEvent.swift */,
+				CA0000000000000000000217 /* WebSocketTransport.swift */,
+				CA0000000000000000000218 /* AppViewModel.swift */,
+				CA0000000000000000000219 /* ChatViewModel.swift */,
+				CA0000000000000000000220 /* SessionsViewModel.swift */,
+				CA0000000000000000000221 /* SettingsViewModel.swift */,
+				CA0000000000000000000222 /* SkillsViewModel.swift */,
+				CA0000000000000000000223 /* SourcesViewModel.swift */,
+				CA0000000000000000000224 /* ChatView.swift */,
+				CA0000000000000000000225 /* ConnectView.swift */,
+				CA0000000000000000000226 /* SessionsListView.swift */,
+				CA0000000000000000000227 /* SettingsView.swift */,
+				CA0000000000000000000228 /* SkillsListView.swift */,
+				CA0000000000000000000229 /* SourcesListView.swift */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		CA0000000000000000000503 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CA0000000000000000000301 /* CraftAgents.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CA0000000000000000000601 /* CraftAgents */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CA0000000000000000000902 /* Build configuration list for PBXNativeTarget "CraftAgents" */;
+			buildPhases = (
+				CA0000000000000000000701 /* Sources */,
+				CA0000000000000000000401 /* Frameworks */,
+				CA0000000000000000000702 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CraftAgents;
+			productName = CraftAgents;
+			productReference = CA0000000000000000000301 /* CraftAgents.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		CA0000000000000000000801 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1640;
+				LastUpgradeCheck = 1640;
+				TargetAttributes = {
+					CA0000000000000000000601 = {
+						CreatedOnToolsVersion = 16.4;
+					};
+				};
+			};
+			buildConfigurationList = CA0000000000000000000901 /* Build configuration list for PBXProject "CraftAgents" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = CA0000000000000000000501;
+			productRefGroup = CA0000000000000000000503 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CA0000000000000000000601 /* CraftAgents */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		CA0000000000000000000702 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CA0000000000000000000701 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CA0000000000000000000101 /* CraftAgentsApp.swift in Sources */,
+				CA0000000000000000000102 /* MainTabView.swift in Sources */,
+				CA0000000000000000000103 /* RootView.swift in Sources */,
+				CA0000000000000000000104 /* Automation.swift in Sources */,
+				CA0000000000000000000105 /* LLMConnection.swift in Sources */,
+				CA0000000000000000000106 /* Message.swift in Sources */,
+				CA0000000000000000000107 /* ServerStatus.swift in Sources */,
+				CA0000000000000000000108 /* Session.swift in Sources */,
+				CA0000000000000000000109 /* Skill.swift in Sources */,
+				CA0000000000000000000110 /* Source.swift in Sources */,
+				CA0000000000000000000111 /* TokenUsage.swift in Sources */,
+				CA0000000000000000000112 /* Workspace.swift in Sources */,
+				CA0000000000000000000113 /* AnyCodable.swift in Sources */,
+				CA0000000000000000000114 /* MessageEnvelope.swift in Sources */,
+				CA0000000000000000000115 /* RPCClient.swift in Sources */,
+				CA0000000000000000000116 /* ServerEvent.swift in Sources */,
+				CA0000000000000000000117 /* WebSocketTransport.swift in Sources */,
+				CA0000000000000000000118 /* AppViewModel.swift in Sources */,
+				CA0000000000000000000119 /* ChatViewModel.swift in Sources */,
+				CA0000000000000000000120 /* SessionsViewModel.swift in Sources */,
+				CA0000000000000000000121 /* SettingsViewModel.swift in Sources */,
+				CA0000000000000000000122 /* SkillsViewModel.swift in Sources */,
+				CA0000000000000000000123 /* SourcesViewModel.swift in Sources */,
+				CA0000000000000000000124 /* ChatView.swift in Sources */,
+				CA0000000000000000000125 /* ConnectView.swift in Sources */,
+				CA0000000000000000000126 /* SessionsListView.swift in Sources */,
+				CA0000000000000000000127 /* SettingsView.swift in Sources */,
+				CA0000000000000000000128 /* SkillsListView.swift in Sources */,
+				CA0000000000000000000129 /* SourcesListView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		CA0000000000000000001001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CA0000000000000000001002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		CA0000000000000000001003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.9.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lukilabs.craftagents.iosdemo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		CA0000000000000000001004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.9.4;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lukilabs.craftagents.iosdemo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		CA0000000000000000000901 /* Build configuration list for PBXProject "CraftAgents" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA0000000000000000001001 /* Debug */,
+				CA0000000000000000001002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CA0000000000000000000902 /* Build configuration list for PBXNativeTarget "CraftAgents" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA0000000000000000001003 /* Debug */,
+				CA0000000000000000001004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = CA0000000000000000000801 /* Project object */;
+}

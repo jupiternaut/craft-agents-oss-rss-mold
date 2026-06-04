@@ -119,6 +119,7 @@ struct SourceRow: View {
         case .mcp: return "server.rack"
         case .api: return "arrow.left.arrow.right"
         case .local: return "folder"
+        case .unknown: return "questionmark.circle"
         case .none: return "link"
         }
     }

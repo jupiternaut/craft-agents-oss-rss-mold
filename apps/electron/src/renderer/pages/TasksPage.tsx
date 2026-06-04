@@ -77,6 +77,15 @@ export function TasksPage() {
   const showOnboardingWizard = activeFlowProject.flowStatus === 'needs-setup' && !!projectPath
   const [onboardingDismissed, setOnboardingDismissed] = React.useState(false)
 
+  // When no explicit Flow project has been selected, Tasks falls back to the
+  // current workspace root. Sync that fallback into activeFlowProjectAtom so
+  // the page can detect an existing .flow/ directory before showing onboarding.
+  React.useEffect(() => {
+    if (!activeFlowProject.path && workspace?.rootPath) {
+      setActiveProject(workspace.rootPath)
+    }
+  }, [activeFlowProject.path, workspace?.rootPath, setActiveProject])
+
   // .flow/ deletion detection: track previous flowStatus to detect transitions
   // from 'initialized' → 'needs-setup' (indicating .flow/ was removed).
   const prevFlowStatusRef = React.useRef(activeFlowProject.flowStatus)

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { BackendHostRuntimeContext } from '../types.ts';
 import { setPathToClaudeCodeExecutable } from '../../options.ts';
 
@@ -44,6 +44,19 @@ function firstExistingPath(candidates: string[]): string | undefined {
   return undefined;
 }
 
+function resolveFromPath(binaryName: string): string | undefined {
+  try {
+    const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+    const result = execFileSync(whichCmd, [binaryName], { encoding: 'utf-8' })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && existsSync(line));
+    return result;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Walk up from `base` checking `join(ancestor, relativePath)` at each level.
  * Stops after `maxLevels` ancestors or when hitting the filesystem root.
@@ -62,6 +75,14 @@ function resolveUpwards(base: string, relativePath: string, maxLevels = 4): stri
 
 function resolveBundledRuntimePath(hostRuntime: BackendHostRuntimeContext): string | undefined {
   const bunBinary = process.platform === 'win32' ? 'bun.exe' : 'bun';
+  const explicitBunPath = process.env.CRAFT_BUN;
+  if (explicitBunPath && existsSync(explicitBunPath)) return explicitBunPath;
+
+  const bunInstallPath = process.env.BUN_INSTALL
+    ? join(process.env.BUN_INSTALL, 'bin', bunBinary)
+    : undefined;
+  if (bunInstallPath && existsSync(bunInstallPath)) return bunInstallPath;
+
   const bunBasePath = process.platform === 'win32'
     ? (hostRuntime.resourcesPath || hostRuntime.appRootPath)
     : hostRuntime.appRootPath;
@@ -72,13 +93,24 @@ function resolveBundledRuntimePath(hostRuntime: BackendHostRuntimeContext): stri
   // Packaged apps must ship their own bundled bun — never resolve from PATH
   // to avoid picking up an incompatible system install.
   if (!hostRuntime.isPackaged) {
-    try {
-      const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-      const systemBun = execFileSync(whichCmd, ['bun'], { encoding: 'utf-8' }).trim();
-      if (systemBun && existsSync(systemBun)) return systemBun;
-    } catch { /* system bun not found */ }
+    return resolveFromPath('bun');
   }
   return undefined;
+}
+
+function resolveNodeRuntimePath(
+  hostRuntime: BackendHostRuntimeContext,
+  bundledRuntimePath: string | undefined,
+): string {
+  if (hostRuntime.nodeRuntimePath) return hostRuntime.nodeRuntimePath;
+  if (bundledRuntimePath) return bundledRuntimePath;
+
+  if (!hostRuntime.isPackaged) {
+    const systemNode = resolveFromPath('node');
+    if (systemNode) return systemNode;
+  }
+
+  return process.execPath;
 }
 
 /**
@@ -146,7 +178,10 @@ function resolveClaudeBinaryPath(hostRuntime: BackendHostRuntimeContext): string
   return undefined;
 }
 
-function resolveInterceptorBundlePath(hostRuntime: BackendHostRuntimeContext): string | undefined {
+function resolveInterceptorBundlePath(
+  hostRuntime: BackendHostRuntimeContext,
+  nodeRuntimePath?: string,
+): string | undefined {
   if (hostRuntime.interceptorBundlePath && existsSync(hostRuntime.interceptorBundlePath)) {
     return hostRuntime.interceptorBundlePath;
   }
@@ -155,7 +190,10 @@ function resolveInterceptorBundlePath(hostRuntime: BackendHostRuntimeContext): s
   // picked up without a manual `bun run build:interceptor`. Bun handles
   // `--require <file>.ts` natively. Packaged builds always go through the
   // pre-built `dist/interceptor.cjs` bundle.
-  if (!hostRuntime.isPackaged) {
+  const canRequireTypeScript = nodeRuntimePath
+    ? basename(nodeRuntimePath).toLowerCase().startsWith('bun')
+    : false;
+  if (!hostRuntime.isPackaged && canRequireTypeScript) {
     const source = resolveUpwards(
       hostRuntime.appRootPath,
       join('packages', 'shared', 'src', 'unified-network-interceptor.ts'),
@@ -206,11 +244,7 @@ function resolveRipgrepPath(hostRuntime: BackendHostRuntimeContext): string | un
   // Packaged apps must use vendored binary only — never resolve from PATH
   // to avoid picking up an incompatible system install.
   if (!hostRuntime.isPackaged) {
-    try {
-      const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-      const systemRg = execFileSync(whichCmd, ['rg'], { encoding: 'utf-8' }).trim();
-      if (systemRg && existsSync(systemRg)) return systemRg;
-    } catch { /* system rg not found */ }
+    return resolveFromPath('rg');
   }
 
   return undefined;
@@ -218,14 +252,15 @@ function resolveRipgrepPath(hostRuntime: BackendHostRuntimeContext): string | un
 
 export function resolveBackendRuntimePaths(hostRuntime: BackendHostRuntimeContext): ResolvedBackendRuntimePaths {
   const bundledRuntimePath = hostRuntime.nodeRuntimePath || resolveBundledRuntimePath(hostRuntime);
+  const nodeRuntimePath = resolveNodeRuntimePath(hostRuntime, bundledRuntimePath);
 
   return {
     claudeCliPath: resolveClaudeBinaryPath(hostRuntime),
-    interceptorBundlePath: resolveInterceptorBundlePath(hostRuntime),
+    interceptorBundlePath: resolveInterceptorBundlePath(hostRuntime, nodeRuntimePath),
     sessionServerPath: resolveServerPath(hostRuntime, 'session-mcp-server'),
     bridgeServerPath: resolveServerPath(hostRuntime, 'bridge-mcp-server'),
     piServerPath: resolveServerPath(hostRuntime, 'pi-agent-server'),
-    nodeRuntimePath: hostRuntime.nodeRuntimePath || bundledRuntimePath || process.execPath,
+    nodeRuntimePath,
     bundledRuntimePath,
   };
 }
