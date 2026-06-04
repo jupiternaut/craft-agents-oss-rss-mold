@@ -34,6 +34,7 @@ type ApiToChannelMapKeys = Exclude<
   | 'recordSkillFeedback' // direct IPC to main process — local Skill Crew feedback sample writer
   | 'listSkillMoments' // direct IPC to main process — local Skill Moments JSONL reader
   | 'runSkillMomentCycle' // direct IPC to main process — local AgentOS mock cycle runner
+  | 'onSkillMomentRunStatus' // direct IPC listener — local Skill Moments run progress
   | 'recordSkillMomentFeedback' // direct IPC to main process — local Skill Moments feedback sample writer
   | 'refreshSkillCrewSkills' // direct IPC to main process — cache-bypassing Skill Crew filesystem refresh
   | 'importSkillToCrewFolder' // direct IPC to main process — copies installed skills into a Crew room folder

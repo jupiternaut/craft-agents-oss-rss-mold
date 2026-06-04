@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Bot, Check, ExternalLink } from 'lucide-react'
+import { Bot, Check, ExternalLink, Heart } from 'lucide-react'
 
 import { SkillAvatar } from '@/components/ui/skill-avatar'
 import { cn } from '@/lib/utils'
@@ -27,6 +27,10 @@ type MomentCardProps = {
   roles: SkillMomentRole[]
   pendingFeedbackKey?: string
   onFeedback: (target: SkillMomentFeedbackTarget, verdict: SkillFeedbackVerdict) => void
+}
+
+function mediaImageSrc(path: string): string {
+  return `thumbnail://thumb/${encodeURIComponent(path)}`
 }
 
 export function MomentCard({
@@ -70,6 +74,20 @@ export function MomentCard({
           {moment.body}
         </div>
 
+        {moment.media?.length ? (
+          <div className="mt-3 grid max-w-[420px] gap-2">
+            {moment.media.map((media) => (
+              <img
+                key={media.id}
+                src={mediaImageSrc(media.path)}
+                alt={media.alt || 'Skill Moment media'}
+                className="w-full rounded-[8px] border border-border/60 object-cover"
+                loading="lazy"
+              />
+            ))}
+          </div>
+        ) : null}
+
         {moment.sources.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {moment.sources.map((source) => (
@@ -103,6 +121,15 @@ export function MomentCard({
             ))}
           </div>
         )}
+
+        {moment.reactions?.length ? (
+          <div className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-[6px] bg-rose-500/10 px-2 py-1 text-[11px] text-rose-700 dark:text-rose-300">
+            <Heart className="size-3 fill-current" />
+            <span className="truncate">
+              {moment.reactions.map((reaction) => reaction.skillName || reaction.handle).join('、')} 点赞
+            </span>
+          </div>
+        ) : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
           <span className="mr-0.5">本次表现</span>

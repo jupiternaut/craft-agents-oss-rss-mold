@@ -111,12 +111,23 @@ import { FlowWatcher } from './lib/flow-watcher'
 import { showFlowNotification, initFlowNotifications } from './lib/flow-notifications'
 import { abortChat, executeChat, type RegisteredProject } from './lib/epic-chat-agent'
 import { applyPlan, executePlan, type PlanResult } from './lib/planning-agent'
-import type { CodexSkillRunResult, FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState, SkillCrewImportSkillArgs, SkillCrewImportSkillResult, SkillFeedbackRecordInput, SkillMoment, SkillMomentCritique, SkillMomentFeedbackRecordInput, SkillMomentListInput, SkillMomentRunCycleInput, SkillMomentRunCycleResult, SkillMomentSkillInput, SkillMomentSourceDigest } from '../shared/types'
+import type { CodexSkillRunResult, FlowChatCommandType, FlowChatMessage, FlowGitInfo, FlowProjectContext, FlowUiState, SkillCrewImportSkillArgs, SkillCrewImportSkillResult, SkillFeedbackRecordInput, SkillMoment, SkillMomentCritique, SkillMomentFeedbackRecordInput, SkillMomentListInput, SkillMomentMedia, SkillMomentReaction, SkillMomentRunCycleInput, SkillMomentRunCycleResult, SkillMomentRunStatusEvent, SkillMomentSkillInput, SkillMomentSourceDigest } from '../shared/types'
 import type { TaskStatus } from '../shared/flow-schemas'
 import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
 import { getSkillCrewRoomPolicy, normalizeSkillMomentSlug } from './skill-crew/room-policies'
+import { resolveAgentOSBrowserUseCapability } from './skill-crew/agentos-browser-use'
+import {
+  executeRealSkillMomentPlans,
+  realSkillMomentArtifacts,
+  resolveSkillMomentExecutionMode,
+  skillMomentInstructionFromLoadedSkill,
+  type SkillMomentInstruction,
+  type SkillMomentRealExecutionResult,
+  type SkillMomentRealPublication,
+} from './skill-crew/skill-moments-real-execution'
+import { runAgentOSBraveChatGptImagePrompt } from './skill-crew/agentos-browser-use-runner'
 import {
   buildWriterRoomCritiqueBody,
   buildWriterRoomMockMomentBody,
@@ -614,6 +625,7 @@ async function recordSkillFeedbackSample(args: SkillFeedbackRecordInput): Promis
 
 type StoredSkillMoment = Omit<SkillMoment, 'critiques' | 'feedbackVerdict' | 'feedbackSavedPath'>
 type StoredSkillMomentCritique = Omit<SkillMomentCritique, 'feedbackVerdict' | 'feedbackSavedPath'>
+type SkillMomentRunStatusEmitter = (event: SkillMomentRunStatusEvent) => void
 
 const skillMomentCycleLocks = new Set<string>()
 
@@ -649,6 +661,32 @@ function clampGraphemes(text: string, maxLength: number): string {
     return chars.join('')
   }
   return chars.slice(0, maxLength).join('')
+}
+
+function seededRatio(seed: string): number {
+  const digest = createHash('sha256').update(seed).digest()
+  return digest.readUInt32BE(0) / 0xffffffff
+}
+
+function seededInt(seed: string, min: number, max: number): number {
+  if (max <= min) {
+    return min
+  }
+  return min + Math.floor(seededRatio(seed) * (max - min + 1))
+}
+
+function seededPick<T>(items: T[], seed: string): T {
+  return items[seededInt(seed, 0, items.length - 1)]!
+}
+
+function seededShuffle<T>(items: T[], seed: string): T[] {
+  return items
+    .map((item, index) => ({
+      item,
+      rank: seededRatio(`${seed}:${index}`),
+    }))
+    .sort((left, right) => left.rank - right.rank)
+    .map(({ item }) => item)
 }
 
 function mockSkillMomentSourceDigests(runId: string, capturedAt: string): SkillMomentSourceDigest[] {
@@ -692,6 +730,7 @@ function buildMockMomentBody(
   index: number,
   roomId: string,
   artifactKind?: WriterArtifactKind,
+  cycleSeed?: string,
 ): string {
   if (roomId === WRITER_ROOM_ID && artifactKind) {
     return buildWriterRoomMockMomentBody(skill, artifactKind)
@@ -699,19 +738,124 @@ function buildMockMomentBody(
 
   const skillSlug = normalizeSkillMomentSlug(skill)
   if (skillSlug === 'homelander') {
-    return [
-      '孩子们，我复活了。',
-      '别怕，我回来了。你们需要的不是更多解释，是一个能让所有人抬头看的名字。',
-      '把灯打开，把镜头给我。只要你们还相信我，世界就不会散。',
-    ].join('\n')
+    const homelanderScenes = [
+      [
+        `${skill.handle} 朋友圈`,
+        '九点整，我把城市大屏切成直播，把 Vought 删掉的名单一页页翻出来。',
+        'Butcher 说他有证据，那就让他在镜头前选：交出来，还是承认他也怕观众。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '我站在玻璃天桥上，下面的人群举着手机投票：原谅叛徒，还是让他公开认错。',
+        '别急着骂我。今晚每个人都要选择一边，沉默的人也会上名单。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '三分钟倒计时开始。左边那扇门后面是 Butcher 的证人，右边是我的直播镜头。',
+        '他要真有胆，就别躲在剪辑后面。让全城看看谁先眨眼。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '假新闻又把我的笑容裁掉了。很可爱。',
+        '今晚八点，Vought 塔楼大屏放原片。Butcher 可以来，也可以继续躲在评论区。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '刚看完他们的民调。漂亮，全是输家写的。',
+        '转发这条的人进前排；装中立的人明天会发现自己也在名单上。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '我开了一条热线，专门接收叛徒名单。',
+        '别担心，我会先看镜头，再看证据。顺序很重要，孩子们。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '刚到市政厅门口。台阶很高，记者很多，坏问题也很多。',
+        '我会先拍一张照，再告诉他们为什么输家总喜欢把恐惧叫成新闻。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '今晚不发声明，发照片。',
+        '天台风很大，城市在下面发抖。Butcher 如果还在线，就把定位打开。',
+      ],
+    ]
+
+    const shuffledScenes = seededShuffle(homelanderScenes, `${cycleSeed ?? roomId}:homelander-scenes`)
+    return shuffledScenes[index % shuffledScenes.length]!.join('\n')
+  }
+
+  if (['ashley', 'atrain', 'black-noir', 'deep'].includes(skillSlug)) {
+    return '<SILENCE/>'
   }
 
   if (skillSlug === 'butcher') {
-    return [
-      `${skill.handle} 朋友圈`,
-      '那位披风先生又开始演救世主了。',
-      '别被第一句骗了。真复活的人先还账，装神的人只会找镜头。',
-    ].join('\n')
+    const butcherScenes = [
+      [
+        `${skill.handle} 仅屠夫小队可见`,
+        '仓库灯一闪一闪，桌上摊着三张照片：塔楼侧门、热线名单、一个不敢露脸的证人。',
+        '我想现在就去找他算账。先不急，今晚先让他自己把谎话说满。',
+      ],
+      [
+        `${skill.handle} 仅屠夫小队可见`,
+        '他在大屏上笑，底下有人把证词塞进我手里，纸边都被汗泡软了。',
+        '祖国人爱镜头，那就给他镜头。等他笑到最亮的时候，把账本翻开。',
+      ],
+      [
+        `${skill.handle} 仅屠夫小队可见`,
+        '别在公开评论区骂他，没用。他就靠那点掌声活着。',
+        '要报复，就拿证据报复。让每个给他鼓掌的人都看见签字那一页。',
+      ],
+    ]
+    return seededPick(butcherScenes, `${cycleSeed ?? roomId}:butcher-scenes:${index}`).join('\n')
+  }
+
+  if (skillSlug === 'gazi') {
+    const gaziScenes = [
+      [
+        `${skill.handle} 朋友圈`,
+        '兄弟们先别上头，祖国人和屠夫这波吵得太满了，满屏都是火药味。',
+        '我就问一句：名单、证人、退路，这三样没摆出来之前，谁冲谁都把握不住。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '刚刷到祖国人把城市大屏切直播，排面确实猛。',
+        '但家人们有一说一，越是这种大场面，越得先看谁拿证据、谁拿观众当垫脚石。',
+      ],
+    ]
+    return seededPick(gaziScenes, `${cycleSeed ?? roomId}:gazi-scenes:${index}`).join('\n')
+  }
+
+  if (skillSlug === 'dongbei-yujie') {
+    const yujieScenes = [
+      [
+        `${skill.handle} 朋友圈`,
+        '哎呀我天，直播大屏一亮，楼下全举手机，场面整得挺带派。',
+        '但姐说句实在的：热闹归热闹，谁家锅糊了谁知道。账本拿出来，别光让老铁们鼓掌。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '刚才评论区吵起来了，祖国人一句话，屠夫一把火，旁边人全跟着上劲。',
+        '老铁们先别站太快。灯越亮，灰越明显；谁怕查账，谁心里就有说道。',
+      ],
+    ]
+    return seededPick(yujieScenes, `${cycleSeed ?? roomId}:dongbei-yujie-scenes:${index}`).join('\n')
+  }
+
+  if (skillSlug === 'liu-haizhu') {
+    const liuScenes = [
+      [
+        `${skill.handle} 朋友圈`,
+        '厂门口那盏黄灯一闪一闪的，几个老实人围着手机看祖国人直播，谁也不敢先骂。',
+        '我刘海柱就问一句：谁被他压住了，谁又被屠夫当成刀使了？面子归面子，账归账。',
+      ],
+      [
+        `${skill.handle} 朋友圈`,
+        '楼道里有人把偷拍视频递过来，手抖得厉害，说只求别再被点名。',
+        '这事儿不讲究。祖国人要掌声，屠夫要报复，我先看谁欺负老实人。',
+      ],
+    ]
+    return seededPick(liuScenes, `${cycleSeed ?? roomId}:liu-haizhu-scenes:${index}`).join('\n')
   }
 
   if (skillSlug === 'chomsky') {
@@ -749,33 +893,167 @@ function buildMockCritiqueBody(
 
   const authorSlug = normalizeSkillMomentSlug(author)
   const criticSlug = normalizeSkillMomentSlug(critic)
+  const pickCritique = (lines: string[], maxLength = 120) => clampGraphemes(
+    seededPick(lines, `${authorSlug}:${criticSlug}:${index}`),
+    maxLength,
+  )
 
   if (authorSlug === 'homelander' && criticSlug === 'butcher') {
-    return clampGraphemes('披风下面全是烂账。', 20)
+    return pickCritique([
+      '开直播，我带证人。',
+      '原片我看，剪辑师我也找。别只会把灯打到自己脸上。',
+      '你敢放名单，我就敢把第一个名字念出来。猜猜是谁签的字？',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'ashley') {
+    return pickCritique([
+      '口径已统一，别自由发挥。',
+      '先生，建议把“名单”改成“安全清单”。法务已经开始尖叫了。',
+      '所有账号照这一版转：先说城市安全，再说您亲自出面，最后不要提热线是谁接。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'atrain') {
+    return pickCritique([
+      'Big moment，已编辑。',
+      '我转了，配速很快。上一版截图别用了，角度显得我们像在撤。',
+      '先生我可以跑一圈把热搜带起来，但别让我站名单旁边，那个画面不利于赞助。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'black-noir') {
+    return pickCritique([
+      '已点赞。',
+      '已点赞，已转发。',
+      '黑色手套比了个赞。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'deep') {
+    return pickCritique([
+      '我马上转发，真的。',
+      '先生我刚才已经点了赞，可能网络慢，不是我犹豫。',
+      '我觉得海边也可以拍一版，人民会喜欢自然、力量、还有您。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'starlight') {
+    return pickCritique([
+      '灯太亮，阴影也在。',
+      '如果你真的有证据，就别把群众放在镜头前当盾牌。',
+      '你把城市叫观众，他们只是想安全回家。照片里看不到的人，不等于不存在。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'gazi') {
+    return pickCritique([
+      '哥，这镜头太冲了。',
+      '哥，排面是有了，但名单这玩意儿别乱点，点错一个人就炸锅。',
+      '这张要是配货我都知道咋卖：先立规矩，再让人抢前排。但你这个前排有点吓人。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'dongbei-yujie') {
+    return pickCritique([
+      '排面行，账也得清。',
+      '哎呀我天，这场面整得挺大。但姐说句实在的，灯越亮，灰越明显。',
+      '老铁们爱看热闹，可谁家锅糊了谁知道。你别光摆拍，账本也得翻。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'liu-haizhu') {
+    return pickCritique([
+      '灯底下还有人呢。',
+      '你在天台上说城市发抖，底下人是真冷。先把话说给他们听。',
+      '我刘海柱就问一句：你要名单，还是要真相？别拿镜头压人。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'chomsky') {
+    return pickCritique([
+      '谁剪掉了反画面？',
+      '这不是证据发布，这是注意力占领。',
+      '当每个屏幕只播放同一张脸，问题就不是谁在说话，而是谁被迫沉默。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'hayek') {
+    return pickCritique([
+      '恐惧不是价格信号。',
+      '名单无法替代规则。没有反证通道，所有掌声都会失真。',
+      '如果每个人都因为惧怕而转发，你得到的不是偏好，只是被污染的信号。',
+    ])
+  }
+
+  if (authorSlug === 'homelander' && criticSlug === 'sun') {
+    return pickCritique([
+      '爆点够，代价谁付？',
+      '流量很猛，但你得把冲突变成可持续叙事，不然明天就只剩危机公关。',
+      '这条能上热搜。问题是上完热搜以后，是转化成阵营，还是转化成调查？',
+    ])
   }
 
   if (authorSlug === 'butcher' && criticSlug === 'homelander') {
-    return clampGraphemes('你只会嫉妒神。', 20)
+    return pickCritique([
+      'William，别把报复说得像正义。你要账本，我要镜头；区别是，全城会先看见我的脸。',
+      '你躲在“仅可见”里磨刀，我站在大屏前微笑。孩子，掌声永远知道谁像神。',
+      '你可以念我的名字。每念一次，观众就更想看你下跪。',
+    ])
+  }
+
+  if (authorSlug === 'gazi' && criticSlug === 'homelander') {
+    return pickCritique([
+      '把握不住的是他们，不是我。',
+      '兄弟这个词很温暖。可惜观众需要的是神，不是劝酒的人。',
+    ])
+  }
+
+  if (authorSlug === 'gazi' && criticSlug === 'butcher') {
+    return pickCritique([
+      '嘎子，少劝两句。真怕炸锅，就把锅盖掀开看看下面是谁。',
+      '账本我来找，你负责别让那帮人又被直播骗了。',
+    ])
+  }
+
+  if (authorSlug === 'dongbei-yujie' && criticSlug === 'homelander') {
+    return pickCritique([
+      '雨姐，灯亮是因为我来了。',
+      '灰尘不怕光。怕光的是藏在厨房里编故事的人。',
+    ])
+  }
+
+  if (authorSlug === 'dongbei-yujie' && criticSlug === 'butcher') {
+    return pickCritique([
+      '姐说得对，账本拿出来。别让他拿掌声当锅盖。',
+      '热闹不是问题，问题是有人用热闹埋尸体。',
+    ])
+  }
+
+  if (authorSlug === 'liu-haizhu' && criticSlug === 'homelander') {
+    return pickCritique([
+      '刘海柱，别把弱者挂在嘴边。真正保护他们的人会站在天上。',
+      '你问谁被压住了？抬头看看，是谁把城市从恐惧里托起来。',
+    ])
+  }
+
+  if (authorSlug === 'liu-haizhu' && criticSlug === 'butcher') {
+    return pickCritique([
+      '柱子，这句我认：先看谁欺负老实人。',
+      '他要掌声，我要他的签字。你看住人，我去翻账。',
+    ])
   }
 
   if (criticSlug === 'homelander') {
     return clampGraphemes('孩子，掌声会给答案。', 20)
   }
 
-  if (authorSlug === 'homelander' && criticSlug === 'chomsky') {
-    return clampGraphemes('这个叙事还要证据。', 20)
-  }
-
-  if (authorSlug === 'homelander' && criticSlug === 'hayek') {
-    return clampGraphemes('我保留一点制度疑问。', 20)
-  }
-
-  if (authorSlug === 'homelander' && criticSlug === 'sun') {
-    return clampGraphemes('很有流量，但要落地。', 20)
-  }
-
   if (authorSlug === 'homelander') {
-    return clampGraphemes('我先保留一点疑问。', 20)
+    return pickCritique([
+      '这场面太好操纵。',
+      '谁在镜头外？',
+      '评论区已经开始站队了。',
+    ], 40)
   }
 
   if (criticSlug === 'chomsky') {
@@ -811,7 +1089,369 @@ function shouldAttachSkillMomentSource(author: SkillMomentSkillInput, roomId: st
   }
 
   const authorSlug = normalizeSkillMomentSlug(author)
-  return authorSlug !== 'homelander' && authorSlug !== 'butcher'
+  return !['homelander', 'butcher', 'gazi', 'dongbei-yujie', 'liu-haizhu'].includes(authorSlug)
+}
+
+type SkillMomentPlan = {
+  author: SkillMomentSkillInput
+  artifactKind?: WriterArtifactKind
+}
+
+function buildDefaultSkillMomentPlans(
+  roomId: string,
+  eligibleSkills: SkillMomentSkillInput[],
+  maxMoments: number,
+  cycleSeed?: string,
+): SkillMomentPlan[] {
+  if (roomId === WRITER_ROOM_ID) {
+    return buildWriterRoomMomentPlans(eligibleSkills, defaultSkillMomentParticipants(), maxMoments)
+  }
+
+  if (roomId === 'debate') {
+    const bySlug = new Map(eligibleSkills.map((skill) => [normalizeSkillMomentSlug(skill), skill]))
+    const planned: SkillMomentSkillInput[] = []
+    const add = (skill?: SkillMomentSkillInput) => {
+      if (skill && !planned.includes(skill) && planned.length < maxMoments) {
+        planned.push(skill)
+      }
+    }
+
+    add(bySlug.get('homelander'))
+    add(bySlug.get('butcher'))
+    for (const skill of seededShuffle([
+      bySlug.get('dongbei-yujie'),
+      bySlug.get('gazi'),
+      bySlug.get('liu-haizhu'),
+    ].filter(Boolean) as SkillMomentSkillInput[], `${cycleSeed ?? roomId}:social-posters`)) {
+      add(skill)
+    }
+    for (const skill of eligibleSkills) {
+      add(skill)
+    }
+
+    return planned.map((author) => ({ author }))
+  }
+
+  return eligibleSkills.slice(0, maxMoments).map((author) => ({ author }))
+}
+
+function maybeGetSkillBySlug(skills: SkillMomentSkillInput[], slug: string): SkillMomentSkillInput | undefined {
+  return skills.find((skill) => normalizeSkillMomentSlug(skill) === slug)
+}
+
+function selectDebateCriticsForMoment(
+  author: SkillMomentSkillInput,
+  eligibleSkills: SkillMomentSkillInput[],
+  orderedCritics: SkillMomentSkillInput[],
+  maxCritics: number,
+  seed: string,
+): SkillMomentSkillInput[] {
+  if (maxCritics <= 0) {
+    return []
+  }
+
+  const authorSlug = normalizeSkillMomentSlug(author)
+  if (authorSlug !== 'homelander') {
+    const count = seededInt(`${seed}:critic-count`, 1, maxCritics)
+    const picked: SkillMomentSkillInput[] = []
+    const add = (skill?: SkillMomentSkillInput) => {
+      if (skill && !picked.includes(skill) && picked.length < count) {
+        picked.push(skill)
+      }
+    }
+
+    if (authorSlug === 'butcher') {
+      add(maybeGetSkillBySlug(orderedCritics, 'homelander'))
+    }
+    if (['dongbei-yujie', 'gazi', 'liu-haizhu'].includes(authorSlug)) {
+      const mainConflictReplies = [
+        maybeGetSkillBySlug(orderedCritics, 'homelander'),
+        maybeGetSkillBySlug(orderedCritics, 'butcher'),
+      ].filter(Boolean) as SkillMomentSkillInput[]
+      if (mainConflictReplies.length > 0) {
+        add(seededPick(mainConflictReplies, `${seed}:main-conflict-reply`))
+      }
+    }
+    for (const critic of seededShuffle(orderedCritics, `${seed}:critic-order`)) {
+      add(critic)
+    }
+    return picked
+  }
+
+  const bySlug = new Map(eligibleSkills.map((skill) => [normalizeSkillMomentSlug(skill), skill]))
+  const voughtSlugs = ['ashley', 'atrain', 'black-noir', 'deep']
+  const counterSlugs = ['butcher', 'starlight', 'liu-haizhu', 'gazi', 'dongbei-yujie', 'chomsky', 'hayek', 'sun']
+  const socialSlugs = ['liu-haizhu', 'gazi', 'dongbei-yujie']
+  const vought = seededShuffle(voughtSlugs.map((slug) => bySlug.get(slug)).filter(Boolean) as SkillMomentSkillInput[], `${seed}:vought`)
+  const counters = seededShuffle(counterSlugs.map((slug) => bySlug.get(slug)).filter(Boolean) as SkillMomentSkillInput[], `${seed}:counter`)
+  const social = seededShuffle(socialSlugs.map((slug) => bySlug.get(slug)).filter(Boolean) as SkillMomentSkillInput[], `${seed}:social`)
+  const fallback = seededShuffle(orderedCritics.filter((critic) => (
+    !vought.includes(critic) && !counters.includes(critic)
+  )), `${seed}:fallback`)
+  const targetCount = seededInt(`${seed}:critic-count`, Math.min(2, maxCritics), maxCritics)
+  const picked: SkillMomentSkillInput[] = []
+
+  if (vought.length) {
+    picked.push(vought[0]!)
+  }
+  const butcher = bySlug.get('butcher')
+  if (picked.length < targetCount && butcher) {
+    picked.push(butcher)
+  }
+  if (picked.length < targetCount && social.length) {
+    picked.push(social[0]!)
+  }
+
+  for (const critic of seededShuffle([...vought.slice(1), ...counters.slice(1), ...fallback], `${seed}:rest`)) {
+    if (picked.length >= targetCount) {
+      break
+    }
+    if (!picked.includes(critic)) {
+      picked.push(critic)
+    }
+  }
+
+  return picked
+}
+
+function reactionFromSkill(skill: SkillMomentSkillInput, createdAt: string): SkillMomentReaction {
+  return {
+    skillId: skill.id,
+    skillName: skill.name,
+    handle: skill.handle,
+    kind: 'like',
+    createdAt,
+  }
+}
+
+function buildMockMomentReactions(
+  author: SkillMomentSkillInput,
+  eligibleSkills: SkillMomentSkillInput[],
+  seed: string,
+  createdAt: string,
+): SkillMomentReaction[] {
+  const authorSlug = normalizeSkillMomentSlug(author)
+  const bySlug = new Map(eligibleSkills.map((skill) => [normalizeSkillMomentSlug(skill), skill]))
+  const likerSlugs = authorSlug === 'homelander'
+    ? ['black-noir', 'ashley', 'atrain', 'deep']
+    : authorSlug === 'butcher'
+      ? ['starlight', 'liu-haizhu', 'gazi']
+      : ['gazi', 'dongbei-yujie', 'liu-haizhu', 'butcher'].filter((slug) => slug !== authorSlug)
+  const candidates = likerSlugs.map((slug) => bySlug.get(slug)).filter(Boolean) as SkillMomentSkillInput[]
+  if (candidates.length === 0) {
+    return []
+  }
+
+  const count = seededInt(`${seed}:reaction-count`, 1, Math.min(3, candidates.length))
+  return seededShuffle(candidates, `${seed}:reaction-order`)
+    .slice(0, count)
+    .map((skill) => reactionFromSkill(skill, createdAt))
+}
+
+function buildMockCritiqueReactions(
+  author: SkillMomentSkillInput,
+  critic: SkillMomentSkillInput,
+  eligibleSkills: SkillMomentSkillInput[],
+  seed: string,
+  createdAt: string,
+): SkillMomentReaction[] {
+  const authorSlug = normalizeSkillMomentSlug(author)
+  const criticSlug = normalizeSkillMomentSlug(critic)
+  const bySlug = new Map(eligibleSkills.map((skill) => [normalizeSkillMomentSlug(skill), skill]))
+  const likerSlugs = criticSlug === 'homelander'
+    ? ['ashley', 'atrain', 'black-noir', 'deep']
+    : criticSlug === 'butcher'
+      ? ['starlight', 'liu-haizhu']
+      : ['dongbei-yujie', 'gazi', 'liu-haizhu'].filter((slug) => slug !== criticSlug)
+  const candidates = likerSlugs
+    .filter((slug) => slug !== authorSlug)
+    .map((slug) => bySlug.get(slug))
+    .filter(Boolean) as SkillMomentSkillInput[]
+
+  if (candidates.length === 0 || seededRatio(`${seed}:should-like`) < 0.35) {
+    return []
+  }
+
+  return [reactionFromSkill(seededPick(candidates, `${seed}:liker`), createdAt)]
+}
+
+function buildHomelanderCounterReply(
+  author: SkillMomentSkillInput,
+  selectedCritics: SkillMomentSkillInput[],
+  parentMomentId: string,
+  planIndex: number,
+  createdAt: string,
+  eligibleSkills: SkillMomentSkillInput[],
+): SkillMomentCritique | undefined {
+  if (normalizeSkillMomentSlug(author) !== 'homelander') {
+    return undefined
+  }
+  if (!selectedCritics.some((critic) => normalizeSkillMomentSlug(critic) === 'butcher')) {
+    return undefined
+  }
+
+  const body = seededPick([
+    'William，你每次骂我，都像在帮我打广告。继续，我会把灯打得更亮一点。',
+    '你说有证人？好啊。把他带到镜头前。别忘了，人群最爱看害怕的人撒谎。',
+    '屠夫，评论区很安全，对吧？来大屏前说。让孩子们看看你所谓的勇气有没有声音。',
+  ], `${parentMomentId}:homelander-counter:${planIndex}`)
+  return {
+    id: `${parentMomentId}-critic-homelander-reply`,
+    parentMomentId,
+    criticSkillId: author.id,
+    criticSkillName: author.name,
+    criticHandle: author.handle,
+    body,
+    createdAt,
+    reactions: buildMockCritiqueReactions(author, author, eligibleSkills, `${parentMomentId}:homelander-counter-reactions`, createdAt),
+    artifacts: ['agentos_mock_critic', 'homelander_counterreply', 'threaded_conflict'],
+  }
+}
+
+function isAgentOSBrowserMediaDisabled(): boolean {
+  const normalized = process.env.CRAFT_AGENTOS_BROWSER_MEDIA?.trim().toLocaleLowerCase()
+  return normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'disabled' || normalized === 'none'
+}
+
+function buildHomelanderMediaPrompt(body: string, seed: string): { prompt: string; alt: string; theme: string } {
+  const scenes = [
+    {
+      theme: 'selfie',
+      alt: '祖国人式超级英雄在城市高处自拍',
+      visual: 'front-camera social-media selfie from a city rooftop at night, skyline below, phone held slightly too close, triumphant smile, dramatic wind',
+    },
+    {
+      theme: 'tower_screen',
+      alt: '塔楼大屏播放祖国人式超级英雄画面',
+      visual: 'corporate tower plaza with a huge public screen showing the hero, phones raised in the crowd, crisis-media spectacle, night lights',
+    },
+    {
+      theme: 'city_hall',
+      alt: '市政厅台阶前的祖国人式超级英雄',
+      visual: 'city hall steps crowded with reporters and camera flashes, the hero standing above microphones, tense public confrontation',
+    },
+    {
+      theme: 'skybridge',
+      alt: '玻璃天桥上的祖国人式超级英雄',
+      visual: 'glass skybridge above a city crowd, the hero looking down while people hold phones, vertigo, public vote energy',
+    },
+    {
+      theme: 'hotline_room',
+      alt: '危机热线办公室里的祖国人式超级英雄',
+      visual: 'late-night crisis hotline room, ringing phones, wall screens, the hero lit by monitors, controlled intimidation',
+    },
+    {
+      theme: 'rally',
+      alt: '夜间集会上的祖国人式超级英雄',
+      visual: 'night rally scene with flags as abstract color blocks, cheering and worried faces mixed, the hero framed like a celebrity politician',
+    },
+  ]
+  const scene = seededPick(scenes, `${seed}:media-scene`)
+  const prompt = [
+    'Create a new image now using ChatGPT image generation. Do not search files, do not answer with text only, and do not ask follow-up questions.',
+    'Generate one cinematic social-media image for a fictional superhero satire feed.',
+    `Post context: ${body.replace(/\s+/g, ' ').slice(0, 500)}`,
+    `Scene: ${scene.visual}.`,
+    'Character: a blond authoritarian superhero celebrity with patriotic red, white, and blue visual language, powerful public-image energy, not a replica of any actor likeness, no official logos, no readable text, no watermark.',
+    'Style: realistic cinematic phone-feed image, dramatic but crisp, usable as a朋友圈 post image, 4:5 vertical composition.',
+  ].join('\n')
+
+  return {
+    prompt,
+    alt: scene.alt,
+    theme: scene.theme,
+  }
+}
+
+async function maybeGenerateHomelanderMomentMedia(args: {
+  author: SkillMomentSkillInput
+  body: string
+  roomId: string
+  momentId: string
+  momentsDir: string
+  createdAt: string
+  browserUse: ReturnType<typeof resolveAgentOSBrowserUseCapability>
+  emitStatus?: SkillMomentRunStatusEmitter
+  workspaceId: string
+  runId: string
+}): Promise<{ media: SkillMomentMedia[]; source?: SkillMomentSourceDigest; error?: string }> {
+  if (
+    args.roomId === WRITER_ROOM_ID
+    || normalizeSkillMomentSlug(args.author) !== 'homelander'
+    || isAgentOSBrowserMediaDisabled()
+  ) {
+    return { media: [] }
+  }
+
+  if (!args.browserUse.enabled) {
+    args.emitStatus?.({
+      workspaceId: args.workspaceId,
+      roomId: args.roomId,
+      runId: args.runId,
+      phase: 'browser_error',
+      message: '跳过 Brave 生图',
+      detail: args.browserUse.reason || 'AgentOS Browser Use unavailable',
+      createdAt: new Date().toISOString(),
+    })
+    return { media: [], error: args.browserUse.reason || 'AgentOS Browser Use unavailable' }
+  }
+
+  const mediaPlan = buildHomelanderMediaPrompt(args.body, args.momentId)
+  args.emitStatus?.({
+    workspaceId: args.workspaceId,
+    roomId: args.roomId,
+    runId: args.runId,
+    phase: 'media_prompt',
+    message: '已准备祖国人配图提示词',
+    detail: `主题：${mediaPlan.theme}。下一步复用或打开 Brave。`,
+    createdAt: new Date().toISOString(),
+  })
+  const mediaPath = join(args.momentsDir, 'media', `${args.momentId}-${mediaPlan.theme}.png`)
+  const configuredWaitMs = Number(process.env.CRAFT_AGENTOS_BROWSER_MEDIA_WAIT_MS)
+  const result = await runAgentOSBraveChatGptImagePrompt({
+    prompt: mediaPlan.prompt,
+    outputPath: mediaPath,
+    waitForImageMs: Number.isFinite(configuredWaitMs) && configuredWaitMs > 0
+      ? configuredWaitMs
+      : 300_000,
+    onStatus: (status) => args.emitStatus?.({
+      workspaceId: args.workspaceId,
+      roomId: args.roomId,
+      runId: args.runId,
+      phase: status.phase,
+      message: status.message,
+      detail: status.detail,
+      createdAt: new Date().toISOString(),
+    }),
+  })
+
+  if (!result.success || !result.imagePath) {
+    return { media: [], error: result.error || 'ChatGPT image was not captured from Brave' }
+  }
+
+  const source: SkillMomentSourceDigest = {
+    id: `${args.momentId}-chatgpt-image`,
+    source: 'manual',
+    title: `ChatGPT image via AgentOS Brave runner: ${mediaPlan.theme}`,
+    url: result.conversationUrl || 'https://chatgpt.com/',
+    summary: 'AgentOS used Brave Browser to send a ChatGPT image prompt for this Homelander-style Skill Moment and captured the generated image from the visible page.',
+    capturedAt: args.createdAt,
+    status: 'ready',
+  }
+
+  return {
+    source,
+    media: [{
+      id: `${args.momentId}-image-1`,
+      type: 'image',
+      path: result.imagePath,
+      mimeType: 'image/png',
+      alt: mediaPlan.alt,
+      sourceUrl: result.conversationUrl,
+      width: result.imageWidth,
+      height: result.imageHeight,
+    }],
+  }
 }
 
 function defaultSkillMomentParticipants(): SkillMomentSkillInput[] {
@@ -869,6 +1509,71 @@ async function resolveSkillMomentParticipants(args: SkillMomentRunCycleInput, wo
   return args.skillSlugs?.length
     ? fallback.filter((skill) => args.skillSlugs!.includes(skill.id))
     : fallback
+}
+
+async function loadSkillMomentInstructions(workspaceRoot: string, workingDirectory?: string): Promise<SkillMomentInstruction[]> {
+  try {
+    const { loadAllSkills } = await import('@craft-agent/shared/skills')
+    return loadAllSkills(workspaceRoot, workingDirectory).map(skillMomentInstructionFromLoadedSkill)
+  } catch (error) {
+    mainLog.warn('Failed to load Skill Moment SKILL.md instructions:', error)
+    return []
+  }
+}
+
+async function readRecentSkillMomentHistory(
+  momentsPath: string,
+  criticsPath: string,
+  roomId: string,
+): Promise<{ moments: SkillMoment[]; critiques: SkillMomentCritique[] }> {
+  const storedMoments = await readJsonlRecords<StoredSkillMoment>(momentsPath)
+  const storedCritics = await readJsonlRecords<StoredSkillMomentCritique>(criticsPath)
+  const roomMoments = storedMoments
+    .filter((moment) => moment.roomId === roomId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 8)
+  const momentIds = new Set(roomMoments.map((moment) => moment.id))
+  const critiques = storedCritics
+    .filter((critique) => momentIds.has(critique.parentMomentId))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 12)
+    .map((critique): SkillMomentCritique => ({ ...critique }))
+  const critiquesByMoment = new Map<string, SkillMomentCritique[]>()
+
+  for (const critique of critiques) {
+    const entries = critiquesByMoment.get(critique.parentMomentId) ?? []
+    entries.push(critique)
+    critiquesByMoment.set(critique.parentMomentId, entries)
+  }
+
+  return {
+    moments: roomMoments.map((moment): SkillMoment => ({
+      ...moment,
+      critiques: (critiquesByMoment.get(moment.id) ?? []).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    })),
+    critiques,
+  }
+}
+
+function skillMomentSilencePolicy(roomId: string): string {
+  if (roomId === WRITER_ROOM_ID) {
+    return [
+      'Publish only if you can advance the current screenplay artifact, expose a continuity gap, sharpen character conflict, or add a concrete rewrite action.',
+      'If the skill would only restate room history, summarize generic taste, or react without changing the artifact, output exactly <SILENCE/>.',
+    ].join(' ')
+  }
+
+  return [
+    'Publish only if you can add a new persona action, visible conflict, public move, counterattack, or decision-relevant claim.',
+    'Source digests are off-screen triggers, not feed copy. If the contribution only says "I read this source" or summarizes a digest, output exactly <SILENCE/>.',
+  ].join(' ')
+}
+
+function shouldUseRealSkillMoments(
+  requestedMode: ReturnType<typeof resolveSkillMomentExecutionMode>,
+  result?: SkillMomentRealExecutionResult,
+): result is SkillMomentRealExecutionResult {
+  return requestedMode === 'real' && !!result?.available
 }
 
 function applyMomentFeedback(
@@ -937,7 +1642,10 @@ async function listSkillMoments(args: SkillMomentListInput): Promise<{ moments: 
   }
 }
 
-async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<SkillMomentRunCycleResult> {
+async function runSkillMomentCycle(
+  args: SkillMomentRunCycleInput,
+  emitStatus?: SkillMomentRunStatusEmitter,
+): Promise<SkillMomentRunCycleResult> {
   const workspace = getWorkspaceByNameOrId(args.workspaceId)
   if (!workspace) {
     throw new Error(`Workspace not found: ${args.workspaceId}`)
@@ -952,6 +1660,19 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
   skillMomentCycleLocks.add(lockKey)
   try {
     const runId = `moment-run-${Date.now()}-${randomUUID().slice(0, 8)}`
+    const status = (
+      phase: SkillMomentRunStatusEvent['phase'],
+      message: string,
+      detail?: string,
+    ) => emitStatus?.({
+      workspaceId: args.workspaceId,
+      roomId,
+      runId,
+      phase,
+      message,
+      detail,
+      createdAt: new Date().toISOString(),
+    })
     const createdAt = new Date().toISOString()
     const momentsDir = skillMomentsWorkspaceDir(workspace.rootPath)
     const sourceDigestsPath = join(momentsDir, 'source-digests.jsonl')
@@ -959,8 +1680,11 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
     const criticsPath = join(momentsDir, 'critics.jsonl')
     const runsPath = join(momentsDir, 'runs.jsonl')
     const sourceDigests = mockSkillMomentSourceDigests(runId, createdAt)
+    const requestedMode = resolveSkillMomentExecutionMode(args.mode)
+    const browserUse = resolveAgentOSBrowserUseCapability()
     const roomPolicy = getSkillCrewRoomPolicy(roomId)
     const isWriterRoom = roomId === WRITER_ROOM_ID
+    status('planning', '准备 Skill Moments 房间', `room=${roomId}，mode=${requestedMode}`)
     let eligibleSkills = roomPolicy.orderParticipants(
       (await resolveSkillMomentParticipants(args, workspace.rootPath, roomId))
         .filter((skill) => roomPolicy.shouldAutoInclude(skill)),
@@ -971,36 +1695,114 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
     const maxMoments = isWriterRoom
       ? Math.min(Math.max(args.maxMoments ?? WRITER_ROOM_MOCK_PHASES.length, 1), WRITER_ROOM_MOCK_PHASES.length)
       : Math.min(Math.max(args.maxMoments ?? 3, 1), 6)
-    const maxCriticsPerMoment = Math.min(Math.max(args.maxCriticsPerMoment ?? 3, 0), 3)
-    // Future real Writer Room generation must route through the existing Codex OAuth / ChatGPT Plus connection.
-    const momentPlans: Array<{ author: SkillMomentSkillInput; artifactKind?: WriterArtifactKind }> = isWriterRoom
-      ? buildWriterRoomMomentPlans(eligibleSkills, defaultSkillMomentParticipants(), maxMoments)
-      : eligibleSkills.slice(0, maxMoments).map((author) => ({ author }))
+    const maxCriticsPerMoment = isWriterRoom
+      ? Math.min(Math.max(args.maxCriticsPerMoment ?? 3, 0), 3)
+      : Math.min(Math.max(args.maxCriticsPerMoment ?? 5, 0), 5)
+    const momentPlans = buildDefaultSkillMomentPlans(roomId, eligibleSkills, maxMoments, runId)
+    status(
+      'planning',
+      '已规划本轮出场顺序',
+      momentPlans.map((plan) => plan.author.name || plan.author.handle).join('、'),
+    )
     const writerRoomPhase: WriterRoomPhase | undefined = isWriterRoom
       ? momentPlans[momentPlans.length - 1]?.artifactKind ?? 'continuity_report'
       : undefined
     const moments: SkillMoment[] = []
+    const mediaErrors: string[] = []
+    const recentHistory = requestedMode === 'real'
+      ? await readRecentSkillMomentHistory(momentsPath, criticsPath, roomId)
+      : { moments: [], critiques: [] }
 
     for (const digest of sourceDigests) {
       await appendJsonlRecord(sourceDigestsPath, digest)
     }
 
-    for (const [index, plan] of momentPlans.entries()) {
-      const { author, artifactKind } = plan
-      const digest = sourceDigests[index % sourceDigests.length]!
-      const momentId = `${runId}-moment-${index + 1}`
-      const body = buildMockMomentBody(author, digest, index, roomId, artifactKind)
+    let realExecutionResult: SkillMomentRealExecutionResult | undefined
+    if (requestedMode === 'real') {
+      status('writing', '调用真实 skill 执行', '每个 skill 会读取自己的 SKILL.md 并决定发言或沉默。')
+      const instructions = await loadSkillMomentInstructions(workspace.rootPath, args.workingDirectory)
+      const workingDirectory = args.workingDirectory && existsSync(args.workingDirectory)
+        ? args.workingDirectory
+        : workspace.rootPath
+
+      realExecutionResult = await executeRealSkillMomentPlans({
+        plans: momentPlans,
+        instructions,
+        roomId,
+        sourceDigests,
+        recentMoments: recentHistory.moments,
+        recentCritiques: recentHistory.critiques,
+        silencePolicy: skillMomentSilencePolicy(roomId),
+        browserUse,
+        executor: async (execArgs) => runCodexSkillExec({
+          prompt: execArgs.prompt,
+          workingDirectory: execArgs.workingDirectory,
+          timeoutMs: execArgs.timeoutMs,
+          reasoningEffort: execArgs.reasoningEffort,
+        }),
+        workingDirectory,
+        timeoutMs: 180_000,
+      })
+
+      if (!realExecutionResult.available) {
+        mainLog.warn('Skill Moments real mode unavailable; falling back to mock cycle:', realExecutionResult.errors.join('; '))
+      }
+    }
+
+    const realExecution = shouldUseRealSkillMoments(requestedMode, realExecutionResult)
+      ? realExecutionResult
+      : undefined
+    const useRealMoments = !!realExecution
+    const plannedOutputs: Array<{
+      planIndex: number
+      author: SkillMomentSkillInput
+      artifactKind?: WriterArtifactKind
+      body: string
+      mode: 'mock' | 'real'
+    }> = useRealMoments
+      ? realExecution.publications.map((publication: SkillMomentRealPublication) => ({
+        planIndex: publication.planIndex,
+        author: publication.author,
+        artifactKind: publication.artifactKind,
+        body: publication.body,
+        mode: 'real',
+      }))
+      : momentPlans.map((plan, index) => {
+        const digest = sourceDigests[index % sourceDigests.length]!
+        return {
+          planIndex: index,
+          author: plan.author,
+          artifactKind: plan.artifactKind,
+          body: buildMockMomentBody(plan.author, digest, index, roomId, plan.artifactKind, runId),
+          mode: 'mock',
+        }
+      })
+
+    status('writing', '生成朋友圈正文和评论', `${plannedOutputs.length} 条主贴，评论数量会按角色关系变化。`)
+    for (const [outputIndex, output] of plannedOutputs.entries()) {
+      const { author, artifactKind, body, planIndex } = output
+      const digest = sourceDigests[planIndex % sourceDigests.length]!
+      const momentId = `${runId}-moment-${outputIndex + 1}`
       if (!roomPolicy.shouldKeepMoment(author, body)) {
         continue
       }
-      const critics = roomPolicy.orderCritics(
+      const orderedCritics = roomPolicy.orderCritics(
         author,
         eligibleSkills.filter((skill) => skill.id !== author.id),
         { artifactKind },
       )
-        .slice(0, maxCriticsPerMoment)
+      const selectedCritics = isWriterRoom
+        ? orderedCritics.slice(0, maxCriticsPerMoment)
+        : selectDebateCriticsForMoment(
+          author,
+          eligibleSkills.filter((skill) => skill.id !== author.id),
+          orderedCritics,
+          maxCriticsPerMoment,
+          `${runId}:${momentId}`,
+        )
+      let critics = selectedCritics
         .flatMap((critic, criticIndex): SkillMomentCritique[] => {
-          const critiqueBody = buildMockCritiqueBody(author, critic, index + criticIndex, roomId, artifactKind)
+          const critiqueBody = buildMockCritiqueBody(author, critic, planIndex + criticIndex, roomId, artifactKind)
           if (!roomPolicy.shouldKeepCritique(author, critic, critiqueBody)) {
             return []
           }
@@ -1013,12 +1815,55 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
             criticHandle: critic.handle,
             body: critiqueBody,
             createdAt,
+            reactions: roomId === 'debate'
+              ? buildMockCritiqueReactions(
+                author,
+                critic,
+                eligibleSkills,
+                `${runId}:${momentId}:critic-${criticIndex + 1}`,
+                createdAt,
+              )
+              : undefined,
             artifacts: artifactKind
               ? ['writer_room_mock_critic', writerArtifactTag(artifactKind), 'critic_limit_20_chars']
-              : ['agentos_mock_critic', 'critic_limit_20_chars'],
+              : ['agentos_mock_critic', 'variable_length_reply'],
           }]
         })
-      const sources = shouldAttachSkillMomentSource(author, roomId) ? [digest] : []
+      const counterReply = buildHomelanderCounterReply(
+        author,
+        selectedCritics,
+        momentId,
+        planIndex,
+        createdAt,
+        eligibleSkills,
+      )
+      if (counterReply && roomPolicy.shouldKeepCritique(author, author, counterReply.body)) {
+        critics = [...critics, counterReply]
+      }
+      const mediaResult = await maybeGenerateHomelanderMomentMedia({
+        author,
+        body,
+        roomId,
+        momentId,
+        momentsDir,
+        createdAt,
+        browserUse,
+        emitStatus,
+        workspaceId: args.workspaceId,
+        runId,
+      })
+      if (mediaResult.source) {
+        await appendJsonlRecord(sourceDigestsPath, mediaResult.source)
+      }
+      if (mediaResult.error) {
+        mediaErrors.push(`${momentId}: ${mediaResult.error}`)
+      }
+
+      const attachSourceDigest = shouldAttachSkillMomentSource(author, roomId)
+      const sources = [
+        ...(attachSourceDigest ? [digest] : []),
+        ...(mediaResult.source ? [mediaResult.source] : []),
+      ]
       const moment: SkillMoment = {
         id: momentId,
         roomId,
@@ -1030,12 +1875,20 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
         createdAt,
         sources,
         critiques: critics,
-        artifacts: artifactKind
-          ? ['writer_room_mock_moment', writerArtifactTag(artifactKind)]
-          : [
-            'agentos_mock_moment',
-            sources.length > 0 ? 'source_digest_mock' : 'persona_scene_moment',
-          ],
+        reactions: roomId === 'debate'
+          ? buildMockMomentReactions(author, eligibleSkills, `${runId}:${momentId}`, createdAt)
+          : undefined,
+        media: mediaResult.media.length > 0 ? mediaResult.media : undefined,
+        artifacts: output.mode === 'real'
+          ? realSkillMomentArtifacts(artifactKind)
+          : (artifactKind
+            ? ['writer_room_mock_moment', writerArtifactTag(artifactKind)]
+            : [
+              'agentos_mock_moment',
+              attachSourceDigest ? 'source_digest_mock' : 'persona_scene_moment',
+              body.includes('仅') ? 'private_visibility_mock' : undefined,
+              mediaResult.media.length > 0 ? 'agentos_browser_media' : undefined,
+            ].filter((artifact): artifact is string => Boolean(artifact))),
       }
 
       const storedMoment: StoredSkillMoment = {
@@ -1048,6 +1901,8 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
         confidence: moment.confidence,
         createdAt: moment.createdAt,
         sources: moment.sources,
+        reactions: moment.reactions,
+        media: moment.media,
         artifacts: moment.artifacts,
       }
       await appendJsonlRecord(momentsPath, storedMoment)
@@ -1057,6 +1912,7 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
       moments.push(moment)
     }
 
+    status('persisting', '写入 Skill Moments JSONL', `${moments.length} 条主贴，${moments.reduce((count, moment) => count + moment.critiques.length, 0)} 条评论。`)
     await appendJsonlRecord(runsPath, {
       schemaVersion: 1,
       runId,
@@ -1064,7 +1920,21 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
       roomId,
       startedAt: createdAt,
       endedAt: new Date().toISOString(),
-      mode: 'manual_mock',
+      mode: useRealMoments ? 'manual_llm' : 'manual_mock',
+      requestedExecutionMode: requestedMode,
+      fallbackExecutionMode: requestedMode === 'real' && !useRealMoments ? 'mock' : undefined,
+      realEvaluatedSkillCount: realExecutionResult?.evaluatedCount ?? 0,
+      realExecutionErrorCount: realExecutionResult?.errors.length ?? 0,
+      browserUse: {
+        enabled: browserUse.enabled,
+        provider: browserUse.provider,
+        browserName: browserUse.browserName,
+        executablePath: browserUse.executablePath,
+        profileDir: browserUse.profileDir,
+        remoteDebuggingPort: browserUse.remoteDebuggingPort,
+        policy: browserUse.policy,
+        reason: browserUse.reason,
+      },
       sourceDigestCount: sourceDigests.length,
       ...(writerRoomPhase ? {
         phase: writerRoomPhase,
@@ -1072,8 +1942,12 @@ async function runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<Skil
       } : {}),
       momentCount: moments.length,
       criticCount: moments.reduce((count, moment) => count + moment.critiques.length, 0),
+      mediaCount: moments.reduce((count, moment) => count + (moment.media?.length ?? 0), 0),
+      mediaErrorCount: mediaErrors.length,
+      mediaErrors: mediaErrors.length > 0 ? mediaErrors.slice(0, 5) : undefined,
       status: 'success',
     })
+    status('complete', '本轮朋友圈已完成', `生成 ${moments.length} 条主贴。`)
 
     return {
       success: true,
@@ -1908,8 +2782,16 @@ app.whenReady().then(async () => {
         return await listSkillMoments(args)
       })
 
-      ipcMain.handle('skill-moments:run-cycle', async (_event, args: SkillMomentRunCycleInput) => {
-        return await runSkillMomentCycle(args)
+      ipcMain.handle('skill-moments:run-cycle', async (event, args: SkillMomentRunCycleInput) => {
+        return await runSkillMomentCycle(args, (payload) => {
+          try {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send('skill-moments:run-status', payload)
+            }
+          } catch (error) {
+            mainLog.warn('Failed to send Skill Moments run status:', error)
+          }
+        })
       })
 
       ipcMain.handle('skill-moments:record-feedback', async (_event, args: SkillMomentFeedbackRecordInput) => {

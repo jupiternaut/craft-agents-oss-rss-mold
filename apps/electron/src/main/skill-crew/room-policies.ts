@@ -22,6 +22,28 @@ const AUTO_MOMENT_EXCLUDED_SKILL_SLUGS = new Set([
   'hafuke',
 ])
 
+const REACTION_ONLY_DEBATE_SKILL_SLUGS = new Set([
+  'ashley',
+  'atrain',
+  'black-noir',
+  'deep',
+])
+
+const HOMELANDER_THEATER_CRITIC_SLUGS = new Set([
+  'ashley',
+  'atrain',
+  'black-noir',
+  'deep',
+  'starlight',
+  'butcher',
+  'chomsky',
+  'hayek',
+  'sun',
+  'gazi',
+  'dongbei-yujie',
+  'liu-haizhu',
+])
+
 const WRITER_ROOM_PREFERRED_SKILL_SLUGS = [
   'showrunner',
   'screenwriter',
@@ -38,6 +60,21 @@ const STRUCTURAL_WRITER_ARTIFACTS = new Set<WriterArtifactKind>([
   'series_bible',
   'episode_outline',
   'beat_sheet',
+])
+
+const SKILL_MOMENT_SLUG_ALIASES = new Map([
+  ['祖国人', 'homelander'],
+  ['屠夫', 'butcher'],
+  ['火车头', 'atrain'],
+  ['玄色', 'black-noir'],
+  ['深海', 'deep'],
+  ['碍事丽', 'ashley'],
+  ['星光', 'starlight'],
+  ['东北雨姐', 'dongbei-yujie'],
+  ['雨姐', 'dongbei-yujie'],
+  ['嘎子', 'gazi'],
+  ['嘎子哥', 'gazi'],
+  ['刘海柱', 'liu-haizhu'],
 ])
 
 const CHARACTER_WRITER_ARTIFACTS = new Set<WriterArtifactKind>([
@@ -69,7 +106,8 @@ function stableSkillSort(
 
 export function normalizeSkillMomentSlug(skill: Pick<SkillMomentSkillInput, 'id' | 'name' | 'handle'>): string {
   const raw = skill.handle?.replace(/^@/, '') || skill.id || skill.name
-  return raw.trim().toLocaleLowerCase()
+  const trimmed = raw.trim()
+  return SKILL_MOMENT_SLUG_ALIASES.get(trimmed) ?? trimmed.toLocaleLowerCase()
 }
 
 export function isSkillSilenceText(text: string): boolean {
@@ -171,8 +209,19 @@ function shouldKeepDefaultMoment(author: SkillMomentSkillInput, body: string): b
   }
 
   const authorSlug = normalizeSkillMomentSlug(author)
+  if (REACTION_ONLY_DEBATE_SKILL_SLUGS.has(authorSlug)) {
+    return false
+  }
+
   if (authorSlug === 'homelander') {
-    return text.includes('孩子们，我复活了。') && text.includes('需要')
+    if (text.includes('我复活了') || text.includes('我回来了')) {
+      return false
+    }
+
+    return (
+      /直播|大屏|倒计时|投票|镜头|门|证人|名单|转发|民调|媒体|前排|塔楼|评论区|集会|记者|市政厅|天台|城市|照片/.test(text)
+      && /Butcher|屠夫|Vought|叛徒|证据|选择|认错|下跪|假新闻|输家|敌人/.test(text)
+    )
   }
 
   return !text.includes('AgentOS 本地 mock') && !text.includes('这条是 AgentOS')
@@ -200,20 +249,33 @@ function shouldKeepDefaultCritique(
     return false
   }
 
+  const authorSlug = normalizeSkillMomentSlug(author)
+  const criticSlug = normalizeSkillMomentSlug(critic)
+
   const chars = Array.from(text).length
+  if (authorSlug === 'homelander' && HOMELANDER_THEATER_CRITIC_SLUGS.has(criticSlug)) {
+    return chars >= 4 && chars <= 120
+  }
+  if (authorSlug === 'homelander' && criticSlug === 'homelander') {
+    return chars >= 4 && chars <= 120
+  }
+  if (authorSlug === 'butcher' && criticSlug === 'homelander') {
+    return chars >= 4 && chars <= 120
+  }
+  if (criticSlug === 'homelander') {
+    return chars >= 4 && chars <= 120
+  }
+  if (criticSlug === 'butcher') {
+    return chars >= 4 && chars <= 120
+  }
+
   if (chars < 5 || chars > 20) {
     return false
   }
 
-  const authorSlug = normalizeSkillMomentSlug(author)
-  const criticSlug = normalizeSkillMomentSlug(critic)
   if (authorSlug === 'homelander' && criticSlug === 'butcher') {
     return true
   }
-  if (criticSlug === 'homelander') {
-    return text.includes('掌声') || text.includes('神')
-  }
-
   return (
     text.includes('？')
     || text.includes('?')

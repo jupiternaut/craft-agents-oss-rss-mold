@@ -367,9 +367,29 @@ export type SkillMomentCritique = {
   criticHandle: string
   body: string
   createdAt: string
+  reactions?: SkillMomentReaction[]
   artifacts?: string[]
   feedbackVerdict?: SkillFeedbackVerdict
   feedbackSavedPath?: string
+}
+
+export type SkillMomentReaction = {
+  skillId: string
+  skillName: string
+  handle: string
+  kind: 'like'
+  createdAt: string
+}
+
+export type SkillMomentMedia = {
+  id: string
+  type: 'image'
+  path: string
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  alt?: string
+  sourceUrl?: string
+  width?: number
+  height?: number
 }
 
 export type SkillMoment = {
@@ -383,6 +403,8 @@ export type SkillMoment = {
   createdAt: string
   sources: SkillMomentSourceDigest[]
   critiques: SkillMomentCritique[]
+  reactions?: SkillMomentReaction[]
+  media?: SkillMomentMedia[]
   artifacts?: string[]
   feedbackVerdict?: SkillFeedbackVerdict
   feedbackSavedPath?: string
@@ -405,9 +427,12 @@ export type SkillMomentListResult = {
   moments: SkillMoment[]
 }
 
+export type SkillMomentExecutionMode = 'mock' | 'real'
+
 export type SkillMomentRunCycleInput = {
   workspaceId: string
   roomId?: string
+  mode?: SkillMomentExecutionMode
   skills?: SkillMomentSkillInput[]
   skillSlugs?: string[]
   workingDirectory?: string
@@ -421,6 +446,29 @@ export type SkillMomentRunCycleResult = {
   moments: SkillMoment[]
   sourceDigests: SkillMomentSourceDigest[]
   path: string
+}
+
+export type SkillMomentRunStatusPhase =
+  | 'planning'
+  | 'writing'
+  | 'media_prompt'
+  | 'browser_prepare'
+  | 'browser_prompt'
+  | 'browser_waiting'
+  | 'browser_capture'
+  | 'browser_error'
+  | 'persisting'
+  | 'complete'
+  | 'error'
+
+export type SkillMomentRunStatusEvent = {
+  workspaceId: string
+  roomId: string
+  runId?: string
+  phase: SkillMomentRunStatusPhase
+  message: string
+  detail?: string
+  createdAt: string
 }
 
 export type SkillMomentFeedbackRecordInput = {
@@ -845,6 +893,7 @@ export interface ElectronAPI {
   recordSkillFeedback(args: SkillFeedbackRecordInput): Promise<SkillFeedbackRecordResult>
   listSkillMoments(args: SkillMomentListInput): Promise<SkillMomentListResult>
   runSkillMomentCycle(args: SkillMomentRunCycleInput): Promise<SkillMomentRunCycleResult>
+  onSkillMomentRunStatus(callback: (event: SkillMomentRunStatusEvent) => void): () => void
   recordSkillMomentFeedback(args: SkillMomentFeedbackRecordInput): Promise<SkillMomentFeedbackRecordResult>
 
   // Flow-next task planning

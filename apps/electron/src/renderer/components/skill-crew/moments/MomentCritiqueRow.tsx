@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Bot, Check } from 'lucide-react'
+import { Bot, Check, Heart } from 'lucide-react'
 
 import { SkillAvatar } from '@/components/ui/skill-avatar'
 import { cn } from '@/lib/utils'
@@ -50,6 +50,14 @@ export function MomentCritiqueRow({
           </span>
         </div>
         <div className="mt-0.5 text-sm leading-5 text-foreground/90">{critique.body}</div>
+        {critique.reactions?.length ? (
+          <div className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-[6px] bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-700 dark:text-rose-300">
+            <Heart className="size-3 fill-current" />
+            <span className="truncate">
+              {critique.reactions.map((reaction) => reaction.skillName || reaction.handle).join('、')} 点赞
+            </span>
+          </div>
+        ) : null}
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
           {skillMomentFeedbackOptions.map((option) => {
             const selected = critique.feedbackVerdict === option.verdict

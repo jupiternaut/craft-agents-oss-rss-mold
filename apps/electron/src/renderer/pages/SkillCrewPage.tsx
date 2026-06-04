@@ -24,7 +24,7 @@ import { SkillMomentsView, type SkillMomentFeedbackTarget } from '@/components/s
 import { feedbackTargetKey } from '@/components/skill-crew/moments/types'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
-import type { LoadedSkill, SkillFeedbackVerdict, SkillMoment } from '../../shared/types'
+import type { LoadedSkill, SkillFeedbackVerdict, SkillMoment, SkillMomentRunStatusEvent } from '../../shared/types'
 import {
   DEFAULT_SKILL_CREW_ROOMS,
   GLOBAL_SKILL_CREW_ROOM,
@@ -167,6 +167,23 @@ const channelLabels = {
 
 function formatChannelLabel(channelId: string): string {
   return channelLabels[channelId as keyof typeof channelLabels] ?? channelId.split('/').pop() ?? channelId
+}
+
+function formatSkillMomentRunPhase(phase: SkillMomentRunStatusEvent['phase']): string {
+  const labels: Record<SkillMomentRunStatusEvent['phase'], string> = {
+    planning: '规划',
+    writing: '写作',
+    media_prompt: '提示词',
+    browser_prepare: 'Brave',
+    browser_prompt: '输入',
+    browser_waiting: '等待',
+    browser_capture: '捕获',
+    browser_error: '失败',
+    persisting: '保存',
+    complete: '完成',
+    error: '失败',
+  }
+  return labels[phase]
 }
 
 function buildRoles(skills: LoadedSkill[]): CrewRole[] {
@@ -627,6 +644,7 @@ export default function SkillCrewPage() {
   const [skillMomentsLoading, setSkillMomentsLoading] = React.useState(false)
   const [skillMomentsRunning, setSkillMomentsRunning] = React.useState(false)
   const [skillMomentsLastRunPath, setSkillMomentsLastRunPath] = React.useState<string | undefined>()
+  const [skillMomentRunStatuses, setSkillMomentRunStatuses] = React.useState<SkillMomentRunStatusEvent[]>([])
   const [skillMomentFeedbackPendingKey, setSkillMomentFeedbackPendingKey] = React.useState<string | undefined>()
   const activeBranch = branches.find((branch) => branch.id === activeBranchId) ?? branches[0]
   const messages = activeBranch?.messages ?? []
@@ -816,22 +834,73 @@ export default function SkillCrewPage() {
     void loadSkillMoments()
   }, [activeCrewSurface, loadSkillMoments])
 
+  React.useEffect(() => {
+    setSkillMomentRunStatuses([])
+  }, [activeChannel, activeWorkspaceId])
+
+  React.useEffect(() => {
+    const unsubscribe = window.electronAPI.onSkillMomentRunStatus?.((event) => {
+      if (event.workspaceId !== activeWorkspaceId || event.roomId !== activeChannel) {
+        return
+      }
+      setSkillMomentRunStatuses((current) => [event, ...current].slice(0, 8))
+    })
+    return () => unsubscribe?.()
+  }, [activeChannel, activeWorkspaceId])
+
   const runSkillMomentCycle = React.useCallback(async () => {
     if (!activeWorkspaceId || skillMomentsRunning) {
       return
     }
 
+    const debateRolePriority = new Map([
+      ['homelander', 0],
+      ['butcher', 1],
+      ['ashley', 2],
+      ['atrain', 3],
+      ['black-noir', 4],
+      ['deep', 5],
+      ['starlight', 6],
+      ['liu-haizhu', 7],
+      ['gazi', 8],
+      ['dongbei-yujie', 9],
+      ['chomsky', 10],
+      ['hayek', 11],
+    ])
+    const roleSlug = (role: CrewRole) => role.handle.replace(/^@/, '').trim().toLocaleLowerCase()
     const cycleRoles = mentionableRoles
       .filter((role) => !role.chairman && role.id !== 'skillcreator' && role.id !== 'hafuke')
-      .slice(0, 8)
+      .map((role, index) => ({ role, index }))
+      .sort((left, right) => {
+        if (activeChannel === 'screenplay') {
+          return left.index - right.index
+        }
+        const leftPriority = debateRolePriority.get(roleSlug(left.role)) ?? Number.MAX_SAFE_INTEGER
+        const rightPriority = debateRolePriority.get(roleSlug(right.role)) ?? Number.MAX_SAFE_INTEGER
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority
+        }
+        return left.index - right.index
+      })
+      .slice(0, activeChannel === 'screenplay' ? 8 : 12)
+      .map(({ role }) => role)
 
+    setSkillMomentRunStatuses([{
+      workspaceId: activeWorkspaceId,
+      roomId: activeChannel,
+      phase: 'planning',
+      message: '收到刷新朋友圈命令',
+      detail: activeChannel === 'debate'
+        ? '先规划角色和舞台冲突；如祖国人需要配图，再准备提示词并打开 Brave。'
+        : '先规划本轮 screenplay 房间产物。',
+      createdAt: new Date().toISOString(),
+    }])
     setSkillMomentsRunning(true)
     try {
       const result = await window.electronAPI.runSkillMomentCycle({
         workspaceId: activeWorkspaceId,
         roomId: activeChannel,
-        maxMoments: activeChannel === 'screenplay' ? 6 : 3,
-        maxCriticsPerMoment: 3,
+        maxMoments: activeChannel === 'screenplay' ? 6 : 5,
         skills: cycleRoles.map((role) => ({
           id: role.id,
           name: role.name,
@@ -849,6 +918,15 @@ export default function SkillCrewPage() {
       })
     } catch (error) {
       console.warn('[SkillCrew] Failed to run Skill Moments cycle', error)
+      const failureStatus: SkillMomentRunStatusEvent = {
+        workspaceId: activeWorkspaceId,
+        roomId: activeChannel,
+        phase: 'error',
+        message: '刷新朋友圈失败',
+        detail: error instanceof Error ? error.message : String(error),
+        createdAt: new Date().toISOString(),
+      }
+      setSkillMomentRunStatuses((current) => [failureStatus, ...current].slice(0, 8))
     } finally {
       setSkillMomentsRunning(false)
     }
@@ -1736,6 +1814,53 @@ export default function SkillCrewPage() {
 
         <aside className="border-l border-border/60 bg-foreground/[0.015] max-[980px]:hidden">
           <div className="flex h-full min-h-0 flex-col">
+            {activeCrewSurface !== 'chat' && (
+              <div className="border-b border-border/60 px-4 py-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Radio className="h-4 w-4" />
+                  AgentOS 状态
+                  <span className={cn(
+                    'ml-auto rounded-[5px] px-1.5 py-0.5 text-[11px]',
+                    skillMomentsRunning
+                      ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-foreground/[0.06] text-muted-foreground',
+                  )}>
+                    {skillMomentsRunning ? 'running' : 'idle'}
+                  </span>
+                </div>
+                <div className="mt-2 space-y-2">
+                  {skillMomentRunStatuses.length > 0 ? (
+                    skillMomentRunStatuses.slice(0, 6).map((status, index) => (
+                      <div key={`${status.createdAt}-${status.phase}-${index}`} className="rounded-[7px] bg-background/70 px-2 py-2">
+                        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <span className={cn(
+                            'rounded-[5px] px-1.5 py-0.5',
+                            status.phase === 'browser_error' || status.phase === 'error'
+                              ? 'bg-destructive/10 text-destructive'
+                              : status.phase === 'complete'
+                                ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-foreground/[0.06]',
+                          )}>
+                            {formatSkillMomentRunPhase(status.phase)}
+                          </span>
+                          <span>
+                            {new Date(status.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs leading-5 text-foreground/90">{status.message}</div>
+                        {status.detail ? (
+                          <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{status.detail}</div>
+                        ) : null}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-[7px] bg-background/70 px-2 py-2 text-xs leading-5 text-muted-foreground">
+                      点击刷新后，这里会显示角色规划、提示词准备、Brave 操作和图片捕获状态。
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-2 border-b border-border/60 px-4 py-3 text-sm font-medium">
               <Users className="h-4 w-4" />
               Members
